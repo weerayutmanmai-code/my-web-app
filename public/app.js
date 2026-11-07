@@ -123,7 +123,9 @@ function openChat(supId) {
 // ---------------------------------------------------------------- ภาพรวม
 
 function OverviewTab() {
-  const root = h('div', { class: 'page' });
+  const content = h('div', { class: 'page' });
+  const officeCard = OfficeSummaryCard();
+  const root = h('div', { class: 'page' }, content, officeCard.el);
   view.replaceChildren(root);
 
   const stat = (label, value, href, tone = '') =>
@@ -161,9 +163,9 @@ function OverviewTab() {
 
   return {
     tab: 'overview',
-    async refresh() {
-      const s = state.summary ?? (await loadSummary());
-      root.replaceChildren(
+    async refresh(force) {
+      const [s] = await Promise.all([state.summary ?? loadSummary(), officeCard.refresh(force)]);
+      content.replaceChildren(
         h('section', { class: 'stats' },
           stat('งานค้าง', s.open_tasks, '#tasks'),
           stat('งานเลยกำหนด', s.overdue_tasks, '#tasks', 'danger'),
@@ -259,6 +261,7 @@ function InboxTab() {
           ),
           h('div', { class: 'sup-item-sub' },
             s.status !== 'active' ? `${SUP_STATUS[s.status]} · ` : '',
+            s.role === 'office' ? 'สำนักงาน · ' : '',
             s.site || (s.last_message_at ? `ล่าสุด ${fmtDateTime(s.last_message_at)}` : 'ยังไม่มีข้อความ'),
           ),
         ),
@@ -410,6 +413,7 @@ function TasksTab() {
     const options = [h('option', { value: '' }, '— ยังไม่ระบุ —')];
     for (const s of state.supervisors) {
       if (s.status !== 'active' && !includeInactive && s.id !== selected) continue;
+      if (s.role === 'office' && s.id !== selected) continue; // คนในสำนักงานไม่รับงาน
       const suffix = s.status !== 'active' ? ` (${SUP_STATUS[s.status]})` : '';
       options.push(h('option', { value: String(s.id) }, s.display_name + suffix));
     }
@@ -616,7 +620,15 @@ function ScheduleCard(opts) {
       extraInputs.forEach((f) => { f.input.value = String(settings[f.name]); });
     }
 
-    if (!busy(recipientsBox)) {
+    if (opts.sharedText) {
+      // ทุกคนได้ข้อความเดียวกัน: แสดงรายชื่อผู้รับ + ตัวอย่างข้อความเดียว
+      recipientsBox.replaceChildren(
+        recipients.length
+          ? h('div', { class: 'small' }, h('strong', {}, 'ส่งถึง: '), recipients.map((r) => r.name).join(', '))
+          : h('div', { class: 'composer-hint', style: 'border-radius:8px' }, opts.emptyText),
+        h('pre', { class: 'summary-shared' }, opts.sharedText(data)),
+      );
+    } else if (!busy(recipientsBox)) {
       // จำว่าเปิดดูตัวอย่างของใครค้างไว้ จะได้ไม่ถูกพับทุกครั้งที่รีเฟรช
       const openIds = new Set([...recipientsBox.querySelectorAll('details[open]')].map((d) => d.dataset.id));
       recipientsBox.replaceChildren(...(recipients.length
@@ -700,6 +712,24 @@ const MorningSummaryCard = () => ScheduleCard({
   savedText: 'บันทึกการตั้งค่าสรุปงานทุกเช้าแล้ว',
 });
 
+const OfficeSummaryCard = () => ScheduleCard({
+  endpoint: '/office-summary',
+  title: '📊 สรุปภาพรวมส่งให้สำนักงานทาง LINE',
+  enabledLabel: 'เปิดส่งสรุปภาพรวมอัตโนมัติ',
+  note: 'ส่งให้คนที่ตั้งบทบาทเป็น "สำนักงาน" คนละ 1 ข้อความ · ถ้าตั้งเวลาก่อนเที่ยงจะสรุปของเมื่อวาน · พิมพ์ "สรุป" ใน LINE ดูได้ทุกเมื่อ (ไม่นับโควตา)',
+  status: (d) => [
+    d.settings.enabled ? `ส่งเวลา ${d.settings.time} น. (${daysText(d.settings.days)})` : 'ปิดอยู่',
+    d.recipients.length ? `ผู้รับ ${d.recipients.length} คน` : 'ยังไม่มีผู้รับ',
+    d.last_sent_date ? `ส่งอัตโนมัติล่าสุด ${fmtDate(d.last_sent_date)}` : 'ยังไม่เคยส่งอัตโนมัติ',
+  ],
+  previewTitle: (d) => `ตัวอย่างสรุป (${fmtDate(d.report_date)})`,
+  emptyText: 'ยังไม่มีผู้รับ: ให้คนในสำนักงานเพิ่มเพื่อน LINE OA แล้วตั้งบทบาทเป็น "สำนักงาน" ในแท็บผู้คุมงาน',
+  sharedText: (d) => d.text,
+  confirmText: (d) => `ส่งสรุปภาพรวมตอนนี้ให้สำนักงาน ${d.recipients.length} คน?\n(ใช้โควตาข้อความ LINE ${d.recipients.length} ข้อความ)`,
+  sentText: (r) => `ส่งสรุปภาพรวมให้ ${r.sent} คนแล้ว`,
+  savedText: 'บันทึกการตั้งค่าสรุปภาพรวมแล้ว',
+});
+
 const ReminderCard = () => ScheduleCard({
   endpoint: '/reminders',
   title: '⏰ เตือนงานใกล้ครบกำหนด',
@@ -744,7 +774,7 @@ function SupervisorsTab() {
     h('section', { class: 'card' },
       h('h2', {}, '👷 ผู้คุมงาน'),
       h('p', { class: 'muted small', style: 'margin:4px 0 0' },
-        'ผู้คุมงานเพิ่มเพื่อน LINE Official Account ของบริษัท แล้วจะขึ้นที่นี่อัตโนมัติ ตรวจสอบแล้วกด "อนุมัติ" เพื่อเปิดให้ใช้งาน'),
+        'ผู้คุมงานเพิ่มเพื่อน LINE Official Account ของบริษัท แล้วจะขึ้นที่นี่อัตโนมัติ ตรวจสอบแล้วกด "อนุมัติ" เพื่อเปิดให้ใช้งาน · คนในสำนักงานก็เพิ่มเพื่อนได้ แล้วตั้งบทบาทเป็น "สำนักงาน" เพื่อรับสรุปภาพรวมทุกวัน'),
     ),
     grid,
   );
@@ -752,7 +782,7 @@ function SupervisorsTab() {
 
   async function save(sup, form, extra = {}) {
     const fd = new FormData(form);
-    const body = { name: fd.get('name'), phone: fd.get('phone'), site: fd.get('site'), ...extra };
+    const body = { name: fd.get('name'), phone: fd.get('phone'), site: fd.get('site'), role: fd.get('role'), ...extra };
     try {
       const result = await api(`/supervisors/${sup.id}`, { method: 'PATCH', body });
       delete form.dataset.dirty;
@@ -765,6 +795,10 @@ function SupervisorsTab() {
   }
 
   function card(sup) {
+    const roleSelect = h('select', { name: 'role' },
+      h('option', { value: 'supervisor' }, 'ผู้คุมงาน'),
+      h('option', { value: 'office' }, 'สำนักงาน'));
+    roleSelect.value = sup.role ?? 'supervisor';
     const form = h('form', {
       class: `card sup-card status-${sup.status}`,
       oninput: () => { form.dataset.dirty = '1'; },
@@ -779,9 +813,12 @@ function SupervisorsTab() {
             sup.is_following ? '' : ' · ', sup.is_following ? null : h('span', { class: 'pill danger' }, 'บล็อกบอทแล้ว'),
           ),
         ),
-        supPill(sup),
+        h('div', { class: 'pills' }, supPill(sup), sup.role === 'office' ? h('span', { class: 'pill office' }, 'สำนักงาน') : null),
       ),
-      h('label', {}, 'ชื่อ-นามสกุล', h('input', { name: 'name', value: sup.name ?? '', maxlength: '100', placeholder: sup.line_name ?? '' })),
+      h('div', { class: 'form-row', style: 'grid-template-columns:1.3fr 1fr' },
+        h('label', {}, 'ชื่อ-นามสกุล', h('input', { name: 'name', value: sup.name ?? '', maxlength: '100', placeholder: sup.line_name ?? '' })),
+        h('label', {}, 'บทบาท', roleSelect),
+      ),
       h('div', { class: 'form-row', style: 'grid-template-columns:1fr 1fr' },
         h('label', {}, 'เบอร์โทร', h('input', { name: 'phone', value: sup.phone ?? '', maxlength: '30', inputmode: 'tel' })),
         h('label', {}, 'หน้างานประจำ', h('input', { name: 'site', value: sup.site ?? '', maxlength: '200', list: 'sup-site-options' })),

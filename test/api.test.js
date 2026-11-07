@@ -212,6 +212,27 @@ test('เตือนงานใกล้ครบกำหนด: ดูค่
   assert.ok(ctx.line.calls.push.some((p) => p.to === 'UD' && /งานใกล้ครบกำหนด/.test(JSON.stringify(p.messages))));
 });
 
+test('ตั้งคนเป็นสำนักงาน แล้วดู/แก้/ส่งสรุปภาพรวม', async () => {
+  const member = await activeSupervisor(ctx, 'UOF');
+  assert.equal((await api(`/supervisors/${member.id}`, { method: 'PATCH', body: { role: 'boss' } })).status, 400);
+  const res = await api(`/supervisors/${member.id}`, { method: 'PATCH', body: { role: 'office', name: 'คุณแอน' } });
+  assert.equal(res.data.supervisor.role, 'office');
+
+  const status = await api('/office-summary');
+  assert.equal(status.status, 200);
+  assert.deepEqual(status.data.settings, { enabled: true, time: '18:00', days: [1, 2, 3, 4, 5, 6] });
+  assert.match(status.data.text, /สรุปภาพรวมงานประจำวัน/);
+  assert.ok(status.data.recipients.some((r) => r.supervisor_id === member.id));
+
+  assert.equal((await api('/office-summary', { method: 'PUT', body: { time: '8:00' } })).status, 400);
+  const updated = await api('/office-summary', { method: 'PUT', body: { time: '08:00' } });
+  assert.equal(updated.data.settings.time, '08:00');
+
+  const sent = await api('/office-summary/send', { method: 'POST' });
+  assert.ok(sent.data.sent >= 1);
+  assert.ok(ctx.line.calls.push.some((p) => p.to === 'UOF' && /สรุปภาพรวม/.test(p.messages[0].text)));
+});
+
 test('ปิดเรื่องปัญหา และอ่านข้อความแล้ว', async () => {
   const sup = await activeSupervisor(ctx, 'UI');
   await ctx.bot.handleEvent(ev.text('แจ้งปัญหา น้ำไม่ไหล', 'UI'));

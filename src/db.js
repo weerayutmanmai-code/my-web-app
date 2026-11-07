@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS supervisors (
   phone            TEXT,
   site             TEXT,
   status           TEXT NOT NULL DEFAULT 'pending',   -- pending | active | inactive
+  role             TEXT NOT NULL DEFAULT 'supervisor', -- supervisor (ผู้คุมงาน) | office (สำนักงาน รับสรุปภาพรวม)
   is_following     INTEGER NOT NULL DEFAULT 1,
   pending_action   TEXT,                              -- report | issue (รอข้อความถัดไป)
   photo_task_id    INTEGER,                           -- งานที่กำลังส่งรูป
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS settings (
 `;
 
 const SUPERVISOR_FIELDS = [
-  'line_name', 'picture_url', 'name', 'phone', 'site', 'status', 'is_following',
+  'line_name', 'picture_url', 'name', 'phone', 'site', 'status', 'role', 'is_following',
   'pending_action', 'photo_task_id', 'photo_task_until',
 ];
 const TASK_FIELDS = ['title', 'detail', 'site', 'supervisor_id', 'due_date', 'status', 'done_at'];
@@ -95,7 +96,16 @@ export function openDatabase(filename = ':memory:') {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
   db.exec(SCHEMA);
+  migrate(db);
   return createRepository(db);
+}
+
+/** ปรับฐานข้อมูลเดิมให้ตรงกับโครงสร้างใหม่ (CREATE TABLE IF NOT EXISTS ไม่เพิ่มคอลัมน์ให้ตารางที่มีอยู่แล้ว) */
+function migrate(db) {
+  const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!columns('supervisors').includes('role')) {
+    db.exec(`ALTER TABLE supervisors ADD COLUMN role TEXT NOT NULL DEFAULT 'supervisor'`);
+  }
 }
 
 function createRepository(db) {
@@ -288,6 +298,29 @@ function createRepository(db) {
     return inserted;
   }
 
+  // ---------- สรุปภาพรวมสำหรับสำนักงาน ----------
+  function listTasksDoneBetween(startIso, endIso) {
+    return all(`${TASK_SELECT} WHERE t.done_at >= ? AND t.done_at < ? ORDER BY t.done_at`, startIso, endIso);
+  }
+
+  function listOpenTasksDueBefore(date) {
+    return all(`${TASK_SELECT} WHERE t.status != 'done' AND t.due_date < ? ORDER BY t.due_date, t.id`, date);
+  }
+
+  function listOpenTasksDueOn(date) {
+    return all(`${TASK_SELECT} WHERE t.status != 'done' AND t.due_date = ? ORDER BY t.id`, date);
+  }
+
+  /** ข้อความจากผู้คุมงานในช่วงเวลา (เฉพาะประเภทที่ระบุ) */
+  function listInboundBetween(startIso, endIso, kinds) {
+    const marks = kinds.map(() => '?').join(', ');
+    return all(
+      `${MESSAGE_SELECT} WHERE m.direction = 'in' AND m.created_at >= ? AND m.created_at < ? AND m.kind IN (${marks})
+       ORDER BY m.id`,
+      startIso, endIso, ...kinds,
+    );
+  }
+
   // ---------- ค่าตั้ง ----------
   function getSetting(key, fallback = null) {
     const row = get('SELECT value FROM settings WHERE key = ?', key);
@@ -330,6 +363,7 @@ function createRepository(db) {
     getTask, createTask, updateTask, deleteTask, listTasks, listOpenTasksFor, listSites,
     listTasksToRemind, markReminded,
     getMessage, addMessage, listMessages, markRead, setMessageResolved, recentActivity, openIssues,
+    listTasksDoneBetween, listOpenTasksDueBefore, listOpenTasksDueOn, listInboundBetween,
     markEventProcessed, getSetting, setSetting, summary,
   };
 }

@@ -169,6 +169,8 @@ label.check input { width: auto; }
 .pill.active, .pill.done { background: var(--green-soft); color: var(--green-dark); }
 .pill.inactive, .pill.todo { background: var(--surface-2); color: var(--muted); }
 .pill.danger { background: var(--red-soft); color: var(--red); }
+.pill.office { background: var(--blue-soft); color: var(--blue); }
+.pills { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 @media (prefers-color-scheme: dark) { .pill.active, .pill.done { color: var(--green); } }
 
 /* ---------- งาน ---------- */
@@ -201,7 +203,7 @@ fieldset.days legend { font-size: .88rem; color: var(--muted); font-weight: 500;
 .summary-recipients { display: grid; gap: 8px; }
 .summary-preview { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
 .summary-preview > summary { cursor: pointer; }
-.summary-preview pre {
+.summary-preview pre, pre.summary-shared {
   margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--green-soft);
   font: inherit; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere;
 }

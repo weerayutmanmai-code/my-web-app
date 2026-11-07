@@ -2,10 +2,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as M from './messages.js';
+import { buildSummaryText } from './morning-summary.js';
+import { buildOfficeSummary } from './office-summary.js';
+import { todayInBangkok } from './dates.js';
 
 const MENU_WORDS = new Set(['เมนู', 'menu', 'help', 'ช่วยเหลือ', 'วิธีใช้', '?']);
 const TASK_WORDS = new Set(['งาน', 'งานของฉัน', 'งานวันนี้', 'ดูงาน', 'งานค้าง', 'tasks']);
 const CANCEL_WORDS = new Set(['ยกเลิก', 'cancel']);
+const SUMMARY_WORDS = new Set(['สรุป', 'สรุปงาน', 'สรุปวันนี้', 'summary']);
 const REPORT_RE = /^(?:รายงาน(?:ประจำวัน)?|report)\s*([\s\S]*)$/i;
 const ISSUE_RE = /^(?:แจ้งปัญหา|ปัญหา|issue)\s*([\s\S]*)$/i;
 
@@ -132,6 +136,7 @@ export function createBot({ db, line, config = {}, logger = console }) {
 
     if (MENU_WORDS.has(word)) return reply(event.replyToken, [M.menu()]);
     if (TASK_WORDS.has(word)) return replyTasks(event.replyToken, sup);
+    if (SUMMARY_WORDS.has(word)) return replySummary(event.replyToken, sup);
     if (CANCEL_WORDS.has(word)) {
       db.updateSupervisor(sup.id, { pending_action: null, photo_task_id: null, photo_task_until: null });
       return reply(event.replyToken, [M.text('ยกเลิกแล้วครับ', M.mainQuickReply())]);
@@ -165,6 +170,15 @@ export function createBot({ db, line, config = {}, logger = console }) {
     const tasks = db.listOpenTasksFor(sup.id);
     if (!tasks.length) return reply(replyToken, [M.text('🎉 ตอนนี้ไม่มีงานค้างครับ', M.mainQuickReply())]);
     return reply(replyToken, M.taskList(tasks));
+  }
+
+  /** ตอบสรุปทันที (เป็น reply จึงไม่นับโควตา): สำนักงานได้ภาพรวม ผู้คุมงานได้งานของตัวเอง */
+  async function replySummary(replyToken, sup) {
+    const text = sup.role === 'office'
+      ? buildOfficeSummary({ db, publicUrl: config.publicUrl }).text
+      : buildSummaryText(sup, db.listOpenTasksFor(sup.id), todayInBangkok(), { greeting: '📊 สรุปงานของคุณ' })
+        ?? '🎉 ตอนนี้ไม่มีงานค้างครับ';
+    return reply(replyToken, [M.text(text, M.mainQuickReply())]);
   }
 
   function activePhotoTask(sup) {

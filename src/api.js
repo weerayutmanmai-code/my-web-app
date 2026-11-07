@@ -6,6 +6,7 @@ import { pushToSupervisor as pushTo } from './notify.js';
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'];
 const SUPERVISOR_STATUSES = ['pending', 'active', 'inactive'];
+const ROLES = ['supervisor', 'office'];
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -35,7 +36,7 @@ function idParam(req) {
   return id;
 }
 
-export function createApiRouter({ db, line, morningSummary, dueReminders }) {
+export function createApiRouter({ db, line, morningSummary, dueReminders, officeSummary }) {
   const router = express.Router();
 
   const findSupervisor = (id) => {
@@ -79,11 +80,15 @@ export function createApiRouter({ db, line, morningSummary, dueReminders }) {
     if (b.status !== undefined && !SUPERVISOR_STATUSES.includes(b.status)) {
       throw new HttpError(400, 'สถานะไม่ถูกต้อง');
     }
+    if (b.role !== undefined && !ROLES.includes(b.role)) {
+      throw new HttpError(400, 'บทบาทไม่ถูกต้อง');
+    }
     const after = db.updateSupervisor(id, {
       name: str(b.name, 100),
       phone: str(b.phone, 30),
       site: str(b.site, 200),
       status: b.status,
+      role: b.role,
     });
 
     let push = { pushed: false, push_error: null };
@@ -214,6 +219,20 @@ export function createApiRouter({ db, line, morningSummary, dueReminders }) {
 
   router.post('/reminders/send', async (req, res) => {
     res.json(await dueReminders.sendDue());
+  });
+
+  // ---------- สรุปภาพรวมให้สำนักงาน ----------
+  router.get('/office-summary', (req, res) => {
+    res.json(officeSummary.status());
+  });
+
+  router.put('/office-summary', (req, res) => {
+    officeSummary.updateSettings(req.body ?? {});
+    res.json(officeSummary.status());
+  });
+
+  router.post('/office-summary/send', async (req, res) => {
+    res.json(await officeSummary.sendAll());
   });
 
   router.use((req, res) => {

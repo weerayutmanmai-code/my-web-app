@@ -5,6 +5,7 @@ import { verifySignature } from './line.js';
 import { createApiRouter } from './api.js';
 import { createMorningSummary } from './morning-summary.js';
 import { createDueReminders } from './reminders.js';
+import { createOfficeSummary } from './office-summary.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -26,9 +27,14 @@ function basicAuth({ adminUser, adminPassword }) {
   };
 }
 
-export function createApp({ db, line, bot, config, morningSummary, dueReminders, logger = console }) {
-  const summary = morningSummary ?? createMorningSummary({ db, line, logger });
-  const reminders = dueReminders ?? createDueReminders({ db, line, logger });
+export function createApp({
+  db, line, bot, config, morningSummary, dueReminders, officeSummary, logger = console,
+}) {
+  const schedules = {
+    morningSummary: morningSummary ?? createMorningSummary({ db, line, logger }),
+    dueReminders: dueReminders ?? createDueReminders({ db, line, logger }),
+    officeSummary: officeSummary ?? createOfficeSummary({ db, line, config, logger }),
+  };
   const app = express();
   app.disable('x-powered-by');
 
@@ -59,7 +65,7 @@ export function createApp({ db, line, bot, config, morningSummary, dueReminders,
   });
 
   app.use(basicAuth(config));
-  app.use('/api', express.json({ limit: '100kb' }), createApiRouter({ db, line, morningSummary: summary, dueReminders: reminders }));
+  app.use('/api', express.json({ limit: '100kb' }), createApiRouter({ db, line, ...schedules }));
   app.use('/uploads', express.static(config.uploadDir, { index: false, fallthrough: false, maxAge: '7d' }));
   app.use(express.static(PUBLIC_DIR, { index: 'index.html' }));
 
