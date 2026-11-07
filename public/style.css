@@ -191,6 +191,11 @@ label.check input { width: auto; }
 .task-controls { display: grid; grid-template-columns: 130px 170px auto; gap: 8px; align-items: center; }
 .task-controls select { padding: 5px 8px; font-size: .88rem; }
 
+/* ---------- ดาวน์โหลด Excel ---------- */
+.export-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.export-row > label { width: 150px; }
+.export-row > label.export-site { flex: 1; min-width: 180px; }
+
 /* ---------- สรุปงานทุกเช้า ---------- */
 .summary-details { margin-top: 12px; }
 .summary-details > summary { cursor: pointer; color: var(--blue); font-size: .9rem; }

@@ -3,6 +3,7 @@ import express from 'express';
 import * as M from './messages.js';
 import { isValidDateString } from './dates.js';
 import { pushToSupervisor as pushTo, pushToGroup } from './notify.js';
+import { buildReport } from './export.js';
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'];
 const SUPERVISOR_STATUSES = ['pending', 'active', 'inactive'];
@@ -37,7 +38,7 @@ function idParam(req) {
   return id;
 }
 
-export function createApiRouter({ db, line, morningSummary, dueReminders, officeSummary }) {
+export function createApiRouter({ db, line, morningSummary, dueReminders, officeSummary, publicUrl = '' }) {
   const router = express.Router();
 
   const findSupervisor = (id) => {
@@ -290,6 +291,16 @@ export function createApiRouter({ db, line, morningSummary, dueReminders, office
 
   router.post('/office-summary/send', async (req, res) => {
     res.json(await officeSummary.sendAll());
+  });
+
+  // ---------- ส่งออก Excel ----------
+  router.get('/export.xlsx', async (req, res) => {
+    const site = str(req.query.site, 200) ?? null;
+    const { workbook, filename } = buildReport({ db, from: req.query.from, to: req.query.to, site, publicUrl });
+    res.attachment(filename);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    await workbook.xlsx.write(res);
+    res.end();
   });
 
   router.use((req, res) => {

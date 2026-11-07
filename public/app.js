@@ -132,8 +132,9 @@ const fromLabel = (m) => (m.group_id ? `${m.supervisor_name} · 👥 ${m.group_n
 
 function OverviewTab() {
   const content = h('div', { class: 'page' });
+  const exportCard = ExportCard();
   const officeCard = OfficeSummaryCard();
-  const root = h('div', { class: 'page' }, content, officeCard.el);
+  const root = h('div', { class: 'page' }, content, exportCard.el, officeCard.el);
   view.replaceChildren(root);
 
   const stat = (label, value, href, tone = '') =>
@@ -173,7 +174,7 @@ function OverviewTab() {
   return {
     tab: 'overview',
     async refresh(force) {
-      const [s] = await Promise.all([state.summary ?? loadSummary(), officeCard.refresh(force)]);
+      const [s] = await Promise.all([state.summary ?? loadSummary(), officeCard.refresh(force), exportCard.refresh(force)]);
       content.replaceChildren(
         h('section', { class: 'stats' },
           stat('งานค้าง', s.open_tasks, '#tasks'),
@@ -196,6 +197,105 @@ function OverviewTab() {
       );
     },
   };
+}
+
+// ---------------------------------------------------------------- ดาวน์โหลด Excel
+
+const addDaysStr = (d, n) => {
+  const x = new Date(`${d}T00:00:00Z`);
+  x.setUTCDate(x.getUTCDate() + n);
+  return x.toISOString().slice(0, 10);
+};
+
+function exportRange(preset) {
+  const t = today();
+  const firstThisMonth = `${t.slice(0, 8)}01`;
+  if (preset === 'last7') return { from: addDaysStr(t, -6), to: t };
+  if (preset === 'lastMonth') {
+    const lastPrev = addDaysStr(firstThisMonth, -1);
+    return { from: `${lastPrev.slice(0, 8)}01`, to: lastPrev };
+  }
+  return { from: firstThisMonth, to: t }; // thisMonth
+}
+
+/** ชื่อไฟล์จาก Content-Disposition (รองรับชื่อภาษาไทยแบบ filename*=UTF-8'') */
+function filenameFrom(res, fallback) {
+  const header = res.headers.get('content-disposition') || '';
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (star) return decodeURIComponent(star[1]);
+  return /filename="([^"]+)"/i.exec(header)?.[1] ?? fallback;
+}
+
+function ExportCard() {
+  const PRESETS = [['thisMonth', 'เดือนนี้'], ['last7', '7 วันล่าสุด'], ['lastMonth', 'เดือนที่แล้ว'], ['custom', 'กำหนดเอง']];
+  const presetSelect = h('select', { name: 'preset', onchange: () => applyPreset() },
+    PRESETS.map(([value, label]) => h('option', { value }, label)));
+  const markCustom = () => { presetSelect.value = 'custom'; };
+  const fromInput = h('input', { type: 'date', name: 'from', required: true, oninput: markCustom });
+  const toInput = h('input', { type: 'date', name: 'to', required: true, oninput: markCustom });
+  const siteSelect = h('select', { name: 'site' }, h('option', { value: '' }, 'ทุกหน้างาน'));
+  const button = h('button', { class: 'btn primary', type: 'submit' }, '📥 ดาวน์โหลด Excel');
+  const form = h('form', { class: 'card form-grid', onsubmit: download },
+    h('h2', {}, '📥 ดาวน์โหลดรายงาน Excel'),
+    h('div', { class: 'export-row' },
+      h('label', {}, 'ช่วงเวลา', presetSelect),
+      h('label', {}, 'ตั้งแต่', fromInput),
+      h('label', {}, 'ถึง', toInput),
+      h('label', { class: 'export-site' }, 'หน้างาน', siteSelect),
+      button,
+    ),
+    h('p', { class: 'small muted', style: 'margin:0' },
+      'ในไฟล์มี 5 แผ่นงาน: สรุปรายคน · งาน · รายงานประจำวัน · ปัญหา · รูปภาพ (มีลิงก์เปิดรูป) — กรองและเรียงข้อมูลใน Excel ได้'),
+  );
+
+  function applyPreset() {
+    if (presetSelect.value === 'custom') return;
+    const { from, to } = exportRange(presetSelect.value);
+    fromInput.value = from;
+    toInput.value = to;
+  }
+  applyPreset();
+
+  async function download(e) {
+    e.preventDefault();
+    if (fromInput.value > toInput.value) {
+      toast('วันที่เริ่มต้องไม่เกินวันที่สิ้นสุด', 'error');
+      return;
+    }
+    const params = new URLSearchParams({ from: fromInput.value, to: toInput.value });
+    if (siteSelect.value) params.set('site', siteSelect.value);
+    button.disabled = true;
+    button.textContent = 'กำลังสร้างไฟล์…';
+    try {
+      const res = await fetch(`/api/export.xlsx?${params}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `ดาวน์โหลดไม่สำเร็จ (${res.status})`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const link = h('a', { href: url, download: filenameFrom(res, 'รายงาน.xlsx') });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast('ดาวน์โหลดรายงานแล้ว');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = '📥 ดาวน์โหลด Excel';
+    }
+  }
+
+  async function refresh() {
+    await loadSites();
+    if (busy(form)) return;
+    const value = siteSelect.value;
+    siteSelect.replaceChildren(h('option', { value: '' }, 'ทุกหน้างาน'), ...state.sites.map((s) => h('option', { value: s }, s)));
+    siteSelect.value = state.sites.includes(value) ? value : '';
+  }
+
+  return { el: form, refresh };
 }
 
 async function resolveIssue(id, resolved) {
