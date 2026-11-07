@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   id         TEXT PRIMARY KEY,
   created_at TEXT NOT NULL
 );
+
+-- ค่าตั้งของระบบที่แก้จากหน้าเว็บได้ (เก็บเป็น JSON)
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 const SUPERVISOR_FIELDS = [
@@ -258,6 +265,26 @@ function createRepository(db) {
     return inserted;
   }
 
+  // ---------- ค่าตั้ง ----------
+  function getSetting(key, fallback = null) {
+    const row = get('SELECT value FROM settings WHERE key = ?', key);
+    if (!row) return fallback;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  function setSetting(key, value) {
+    run(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      key, JSON.stringify(value), nowIso(),
+    );
+    return value;
+  }
+
   // ---------- ภาพรวม ----------
   function summary() {
     const count = (sql, ...p) => get(sql, ...p).n;
@@ -279,6 +306,6 @@ function createRepository(db) {
     getSupervisor, getSupervisorByLineId, createSupervisor, updateSupervisor, listSupervisors,
     getTask, createTask, updateTask, deleteTask, listTasks, listOpenTasksFor, listSites,
     getMessage, addMessage, listMessages, markRead, setMessageResolved, recentActivity, openIssues,
-    markEventProcessed, summary,
+    markEventProcessed, getSetting, setSetting, summary,
   };
 }

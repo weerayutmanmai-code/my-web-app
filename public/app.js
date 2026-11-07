@@ -10,8 +10,10 @@ const KIND_TAG = {
   status: '🔄 อัปเดตงาน',
   image: '📷 รูปภาพ',
   location: '📍 ตำแหน่ง',
+  summary: '🌅 สรุปงานประจำวัน',
 };
-const KIND_ICON = { text: '💬', report: '📝', issue: '🚨', status: '🔄', task: '📋', image: '📷', location: '📍', system: 'ℹ️' };
+const KIND_ICON = { text: '💬', report: '📝', issue: '🚨', status: '🔄', task: '📋', image: '📷', location: '📍', system: 'ℹ️', summary: '🌅' };
+const DAY_LABELS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 
 const state = {
   summary: null,
@@ -145,6 +147,7 @@ function OverviewTab() {
     const label = m.direction === 'out' ? `สำนักงาน → ${m.supervisor_name}` : m.supervisor_name;
     let body = m.text;
     if (m.kind === 'image') body = m.task_id ? `ส่งรูปงาน #${m.task_id}` : 'ส่งรูป';
+    if (m.kind === 'summary') body = 'ส่งสรุปงานประจำวันทาง LINE';
     return h('li', {},
       h('span', { class: 'feed-icon' }, KIND_ICON[m.kind] ?? '💬'),
       h('a', { class: 'feed-link', href: `#inbox/${m.supervisor_id}` },
@@ -384,8 +387,10 @@ function TasksTab() {
   );
   const chips = h('div', { class: 'chips' });
   const list = h('div', { class: 'task-list' });
+  const summaryCard = MorningSummaryCard();
   const root = h('div', { class: 'page' },
     form,
+    summaryCard.el,
     h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'รายการงาน'), chips), list),
   );
   view.replaceChildren(root);
@@ -522,7 +527,7 @@ function TasksTab() {
   }
 
   async function refresh(force) {
-    await Promise.all([loadSupervisors(), loadTasks(), loadSites()]);
+    await Promise.all([loadSupervisors(), loadTasks(), loadSites(), summaryCard.refresh(force)]);
     if (!busy(form)) fillSupSelect();
     siteList.replaceChildren(...state.sites.map((s) => h('option', { value: s })));
     if (!force && busy(list)) return;
@@ -531,6 +536,134 @@ function TasksTab() {
   }
 
   return { tab: 'tasks', refresh };
+}
+
+// ---------------------------------------------------------------- สรุปงานทุกเช้า
+
+function MorningSummaryCard() {
+  let data = null;
+  const statusLine = h('div', { class: 'small muted' });
+  const enabledInput = h('input', { type: 'checkbox', name: 'enabled' });
+  const timeInput = h('input', { type: 'time', name: 'time', required: true });
+  const dayInputs = DAY_LABELS.map((_, i) => h('input', { type: 'checkbox', name: 'days', value: String(i) }));
+  const recipientsBox = h('div', { class: 'summary-recipients' });
+  const sendBtn = h('button', { class: 'btn', type: 'button', onclick: sendNow }, '📨 ส่งตอนนี้');
+
+  const form = h('form', {
+    class: 'form-grid',
+    oninput: () => { form.dataset.dirty = '1'; },
+    onsubmit: save,
+  },
+    h('label', { class: 'check' }, enabledInput, 'เปิดส่งสรุปอัตโนมัติทุกเช้า'),
+    h('div', { class: 'summary-row' },
+      h('label', {}, 'เวลาส่ง (เวลาไทย)', timeInput),
+      h('fieldset', { class: 'days' },
+        h('legend', {}, 'วันที่ส่ง'),
+        dayInputs.map((input, i) => h('label', { class: 'check day' }, input, DAY_LABELS[i])),
+      ),
+    ),
+    h('div', { class: 'form-actions' },
+      h('span', { class: 'small muted' }, 'ส่งเฉพาะคนที่มีงานค้าง คนละ 1 ข้อความ (นับโควตา LINE OA)'),
+      h('button', { class: 'btn primary', type: 'submit' }, 'บันทึกการตั้งค่า'),
+    ),
+  );
+
+  const el = h('section', { class: 'card' },
+    h('div', { class: 'card-head', style: 'margin-bottom:0' },
+      h('div', {}, h('h2', {}, '🌅 สรุปงานส่งเข้า LINE ทุกเช้า'), statusLine),
+      sendBtn,
+    ),
+    h('details', { class: 'summary-details' },
+      h('summary', {}, 'ตั้งค่า และดูตัวอย่างข้อความที่แต่ละคนจะได้รับ'),
+      form,
+      h('h3', { class: 'summary-sub' }, 'ตัวอย่างข้อความวันนี้'),
+      recipientsBox,
+    ),
+  );
+
+  function daysText(days) {
+    if (days.length === 7) return 'ทุกวัน';
+    if (days.join() === '1,2,3,4,5,6') return 'จันทร์–เสาร์';
+    if (days.join() === '1,2,3,4,5') return 'จันทร์–ศุกร์';
+    return days.map((d) => DAY_LABELS[d]).join(' ') || 'ไม่ได้เลือกวัน';
+  }
+
+  function render() {
+    const { settings, recipients, last_sent_date: last } = data;
+    statusLine.textContent = [
+      settings.enabled ? `ส่งเวลา ${settings.time} น. (${daysText(settings.days)})` : 'ปิดอยู่',
+      `วันนี้มีผู้รับ ${recipients.length} คน`,
+      last ? `ส่งอัตโนมัติล่าสุด ${fmtDate(last)}` : 'ยังไม่เคยส่งอัตโนมัติ',
+    ].join(' · ');
+    sendBtn.disabled = !recipients.length;
+
+    if (!form.dataset.dirty && !busy(form)) {
+      enabledInput.checked = settings.enabled;
+      timeInput.value = settings.time;
+      dayInputs.forEach((input, i) => { input.checked = settings.days.includes(i); });
+    }
+
+    if (!busy(recipientsBox)) {
+      // จำว่าเปิดดูตัวอย่างของใครค้างไว้ จะได้ไม่ถูกพับทุกครั้งที่รีเฟรช
+      const openIds = new Set([...recipientsBox.querySelectorAll('details[open]')].map((d) => d.dataset.id));
+      recipientsBox.replaceChildren(...(recipients.length
+        ? recipients.map((r) => h('details', {
+          class: 'summary-preview',
+          'data-id': String(r.supervisor_id),
+          open: openIds.has(String(r.supervisor_id)),
+        },
+          h('summary', {},
+            h('strong', {}, r.name),
+            ` · งานค้าง ${r.task_count}`,
+            r.overdue_count ? h('span', { class: 'pill danger', style: 'margin-left:6px' }, `เลยกำหนด ${r.overdue_count}`) : null,
+          ),
+          h('pre', {}, r.text),
+        ))
+        : [empty('วันนี้ยังไม่มีใครมีงานค้าง จึงไม่มีข้อความที่จะส่ง')]));
+    }
+  }
+
+  async function refresh(force) {
+    if (!force && form.dataset.dirty) return;
+    data = await api('/morning-summary');
+    render();
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    const body = {
+      enabled: enabledInput.checked,
+      time: timeInput.value,
+      days: dayInputs.filter((i) => i.checked).map((i) => Number(i.value)),
+    };
+    try {
+      data = await api('/morning-summary', { method: 'PUT', body });
+      delete form.dataset.dirty;
+      render();
+      toast('บันทึกการตั้งค่าสรุปงานทุกเช้าแล้ว');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function sendNow() {
+    const n = data?.recipients.length ?? 0;
+    if (!n) return;
+    if (!confirm(`ส่งสรุปงานตอนนี้ให้ผู้คุมงาน ${n} คน?\n(ใช้โควตาข้อความ LINE ${n} ข้อความ)`)) return;
+    sendBtn.disabled = true;
+    try {
+      const r = await api('/morning-summary/send', { method: 'POST' });
+      if (r.failed) toast(`ส่งสำเร็จ ${r.sent} คน ไม่สำเร็จ ${r.failed} คน (ดูสาเหตุได้ในแท็บข้อความ)`, 'warn');
+      else toast(`ส่งสรุปงานให้ ${r.sent} คนแล้ว`);
+      await tick(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  return { el, refresh };
 }
 
 // ---------------------------------------------------------------- ผู้คุมงาน

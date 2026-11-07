@@ -27,6 +27,26 @@ export function formatThaiDate(value) {
   });
 }
 
+const WEEKDAY = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** วันที่ เวลา และวันในสัปดาห์ตามเวลาไทย: { date: 'YYYY-MM-DD', time: 'HH:MM', weekday: 0-6 (0 = อาทิตย์) } */
+export function bangkokParts(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: TZ, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).map((p) => [p.type, p.value]),
+  );
+  return { date: todayInBangkok(date), time: `${parts.hour}:${parts.minute}`, weekday: WEEKDAY[parts.weekday] };
+}
+
+/** "2026-11-07" -> "วันเสาร์ที่ 7 พ.ย. 69" */
+export function formatThaiLongDate(value) {
+  if (!isValidDateString(value)) return value ?? '';
+  return new Date(`${value}T00:00:00+07:00`).toLocaleDateString('th-TH', {
+    weekday: 'long', day: 'numeric', month: 'short', year: '2-digit', timeZone: TZ,
+  });
+}
+
 export function isOverdue(task, today = todayInBangkok()) {
   return Boolean(task?.due_date) && task.status !== 'done' && task.due_date < today;
 }

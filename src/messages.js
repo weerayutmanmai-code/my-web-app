@@ -43,7 +43,7 @@ export function text(body, quickReply) {
   return msg;
 }
 
-const nameOf = (sup) => sup?.name?.trim() || sup?.line_name || '';
+export const nameOf = (sup) => sup?.name?.trim() || sup?.line_name || '';
 
 // ---------- ข้อความทั่วไป ----------
 export function menu() {
