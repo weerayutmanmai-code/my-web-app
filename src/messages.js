@@ -183,6 +183,26 @@ export function newTask(task) {
   };
 }
 
+const dueWhen = (daysBefore) =>
+  daysBefore === 0 ? 'วันนี้' : daysBefore === 1 ? 'พรุ่งนี้' : `ในอีก ${daysBefore} วัน`;
+
+/** เตือนงานใกล้ครบกำหนด: 1 ข้อความต่อคน (งานเดียว = การ์ดเดียว, หลายงาน = ปัดดูได้) */
+export function dueReminder(tasks, daysBefore) {
+  const when = dueWhen(daysBefore);
+  const heading = `⏰ ครบกำหนด${when}`;
+  const bubbles = tasks.slice(0, MAX_BUBBLES).map((t) => taskBubble(t, { heading }));
+  return {
+    type: 'flex',
+    altText: clip(`⏰ งานครบกำหนด${when} ${tasks.length} งาน: ${tasks.map((t) => t.title).join(', ')}`, 400),
+    contents: bubbles.length === 1 ? bubbles[0] : { type: 'carousel', contents: bubbles },
+    quickReply: mainQuickReply(),
+  };
+}
+
+export function dueReminderLog(tasks, daysBefore) {
+  return `⏰ เตือนงานครบกำหนด${dueWhen(daysBefore)}: ${tasks.map((t) => `#${t.id} ${t.title}`).join(', ')}`;
+}
+
 export function statusUpdated(task) {
   if (task.status === 'done') {
     return text(`✅ บันทึกแล้ว: งาน #${task.id} ${task.title} เสร็จเรียบร้อย\nส่งรูปผลงานให้สำนักงานได้เลยครับ`, {

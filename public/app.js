@@ -12,7 +12,7 @@ const KIND_TAG = {
   location: '📍 ตำแหน่ง',
   summary: '🌅 สรุปงานประจำวัน',
 };
-const KIND_ICON = { text: '💬', report: '📝', issue: '🚨', status: '🔄', task: '📋', image: '📷', location: '📍', system: 'ℹ️', summary: '🌅' };
+const KIND_ICON = { text: '💬', report: '📝', issue: '🚨', status: '🔄', task: '📋', image: '📷', location: '📍', system: 'ℹ️', summary: '🌅', reminder: '⏰' };
 const DAY_LABELS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 
 const state = {
@@ -388,9 +388,11 @@ function TasksTab() {
   const chips = h('div', { class: 'chips' });
   const list = h('div', { class: 'task-list' });
   const summaryCard = MorningSummaryCard();
+  const reminderCard = ReminderCard();
   const root = h('div', { class: 'page' },
     form,
     summaryCard.el,
+    reminderCard.el,
     h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'รายการงาน'), chips), list),
   );
   view.replaceChildren(root);
@@ -527,7 +529,7 @@ function TasksTab() {
   }
 
   async function refresh(force) {
-    await Promise.all([loadSupervisors(), loadTasks(), loadSites(), summaryCard.refresh(force)]);
+    await Promise.all([loadSupervisors(), loadTasks(), loadSites(), summaryCard.refresh(force), reminderCard.refresh(force)]);
     if (!busy(form)) fillSupSelect();
     siteList.replaceChildren(...state.sites.map((s) => h('option', { value: s })));
     if (!force && busy(list)) return;
@@ -538,14 +540,33 @@ function TasksTab() {
   return { tab: 'tasks', refresh };
 }
 
-// ---------------------------------------------------------------- สรุปงานทุกเช้า
+// ---------------------------------------------------------------- งานตั้งเวลา (สรุปเช้า / เตือนใกล้ครบกำหนด)
 
-function MorningSummaryCard() {
+function daysText(days) {
+  if (days.length === 7) return 'ทุกวัน';
+  if (days.join() === '1,2,3,4,5,6') return 'จันทร์–เสาร์';
+  if (days.join() === '1,2,3,4,5') return 'จันทร์–ศุกร์';
+  return days.map((d) => DAY_LABELS[d]).join(' ') || 'ไม่ได้เลือกวัน';
+}
+
+const dueWhenText = (n) => (n === 0 ? 'วันนี้' : n === 1 ? 'พรุ่งนี้' : `ในอีก ${n} วัน`);
+
+/**
+ * การ์ดตั้งค่างานที่ทำวันละครั้ง: สถานะ, ตั้งเวลา/วัน/เปิดปิด, ตัวอย่างรายคน, ปุ่มส่งตอนนี้
+ * opts: endpoint, title, enabledLabel, note, extraFields, status(data), previewTitle(data),
+ *       emptyText, previewItem(r) -> { summary, body }, confirmText(data), sentText(result), savedText
+ */
+function ScheduleCard(opts) {
   let data = null;
   const statusLine = h('div', { class: 'small muted' });
   const enabledInput = h('input', { type: 'checkbox', name: 'enabled' });
   const timeInput = h('input', { type: 'time', name: 'time', required: true });
   const dayInputs = DAY_LABELS.map((_, i) => h('input', { type: 'checkbox', name: 'days', value: String(i) }));
+  const extraInputs = (opts.extraFields ?? []).map((f) => ({
+    ...f,
+    input: h('select', { name: f.name }, f.options.map(([value, label]) => h('option', { value: String(value) }, label))),
+  }));
+  const previewHeading = h('h3', { class: 'summary-sub' });
   const recipientsBox = h('div', { class: 'summary-recipients' });
   const sendBtn = h('button', { class: 'btn', type: 'button', onclick: sendNow }, '📨 ส่งตอนนี้');
 
@@ -554,78 +575,66 @@ function MorningSummaryCard() {
     oninput: () => { form.dataset.dirty = '1'; },
     onsubmit: save,
   },
-    h('label', { class: 'check' }, enabledInput, 'เปิดส่งสรุปอัตโนมัติทุกเช้า'),
+    h('label', { class: 'check' }, enabledInput, opts.enabledLabel),
     h('div', { class: 'summary-row' },
       h('label', {}, 'เวลาส่ง (เวลาไทย)', timeInput),
+      extraInputs.map((f) => h('label', { class: 'summary-extra' }, f.label, f.input)),
       h('fieldset', { class: 'days' },
         h('legend', {}, 'วันที่ส่ง'),
         dayInputs.map((input, i) => h('label', { class: 'check day' }, input, DAY_LABELS[i])),
       ),
     ),
     h('div', { class: 'form-actions' },
-      h('span', { class: 'small muted' }, 'ส่งเฉพาะคนที่มีงานค้าง คนละ 1 ข้อความ (นับโควตา LINE OA)'),
+      h('span', { class: 'small muted' }, opts.note),
       h('button', { class: 'btn primary', type: 'submit' }, 'บันทึกการตั้งค่า'),
     ),
   );
 
   const el = h('section', { class: 'card' },
     h('div', { class: 'card-head', style: 'margin-bottom:0' },
-      h('div', {}, h('h2', {}, '🌅 สรุปงานส่งเข้า LINE ทุกเช้า'), statusLine),
+      h('div', {}, h('h2', {}, opts.title), statusLine),
       sendBtn,
     ),
     h('details', { class: 'summary-details' },
       h('summary', {}, 'ตั้งค่า และดูตัวอย่างข้อความที่แต่ละคนจะได้รับ'),
       form,
-      h('h3', { class: 'summary-sub' }, 'ตัวอย่างข้อความวันนี้'),
+      previewHeading,
       recipientsBox,
     ),
   );
 
-  function daysText(days) {
-    if (days.length === 7) return 'ทุกวัน';
-    if (days.join() === '1,2,3,4,5,6') return 'จันทร์–เสาร์';
-    if (days.join() === '1,2,3,4,5') return 'จันทร์–ศุกร์';
-    return days.map((d) => DAY_LABELS[d]).join(' ') || 'ไม่ได้เลือกวัน';
-  }
-
   function render() {
-    const { settings, recipients, last_sent_date: last } = data;
-    statusLine.textContent = [
-      settings.enabled ? `ส่งเวลา ${settings.time} น. (${daysText(settings.days)})` : 'ปิดอยู่',
-      `วันนี้มีผู้รับ ${recipients.length} คน`,
-      last ? `ส่งอัตโนมัติล่าสุด ${fmtDate(last)}` : 'ยังไม่เคยส่งอัตโนมัติ',
-    ].join(' · ');
+    const { settings, recipients } = data;
+    statusLine.textContent = opts.status(data).join(' · ');
+    previewHeading.textContent = opts.previewTitle(data);
     sendBtn.disabled = !recipients.length;
 
     if (!form.dataset.dirty && !busy(form)) {
       enabledInput.checked = settings.enabled;
       timeInput.value = settings.time;
       dayInputs.forEach((input, i) => { input.checked = settings.days.includes(i); });
+      extraInputs.forEach((f) => { f.input.value = String(settings[f.name]); });
     }
 
     if (!busy(recipientsBox)) {
       // จำว่าเปิดดูตัวอย่างของใครค้างไว้ จะได้ไม่ถูกพับทุกครั้งที่รีเฟรช
       const openIds = new Set([...recipientsBox.querySelectorAll('details[open]')].map((d) => d.dataset.id));
       recipientsBox.replaceChildren(...(recipients.length
-        ? recipients.map((r) => h('details', {
-          class: 'summary-preview',
-          'data-id': String(r.supervisor_id),
-          open: openIds.has(String(r.supervisor_id)),
-        },
-          h('summary', {},
-            h('strong', {}, r.name),
-            ` · งานค้าง ${r.task_count}`,
-            r.overdue_count ? h('span', { class: 'pill danger', style: 'margin-left:6px' }, `เลยกำหนด ${r.overdue_count}`) : null,
-          ),
-          h('pre', {}, r.text),
-        ))
-        : [empty('วันนี้ยังไม่มีใครมีงานค้าง จึงไม่มีข้อความที่จะส่ง')]));
+        ? recipients.map((r) => {
+          const item = opts.previewItem(r);
+          return h('details', {
+            class: 'summary-preview',
+            'data-id': String(r.supervisor_id),
+            open: openIds.has(String(r.supervisor_id)),
+          }, h('summary', {}, item.summary), h('pre', {}, item.body));
+        })
+        : [empty(opts.emptyText)]));
     }
   }
 
   async function refresh(force) {
     if (!force && form.dataset.dirty) return;
-    data = await api('/morning-summary');
+    data = await api(opts.endpoint);
     render();
   }
 
@@ -636,25 +645,25 @@ function MorningSummaryCard() {
       time: timeInput.value,
       days: dayInputs.filter((i) => i.checked).map((i) => Number(i.value)),
     };
+    for (const f of extraInputs) body[f.name] = Number(f.input.value);
     try {
-      data = await api('/morning-summary', { method: 'PUT', body });
+      data = await api(opts.endpoint, { method: 'PUT', body });
       delete form.dataset.dirty;
       render();
-      toast('บันทึกการตั้งค่าสรุปงานทุกเช้าแล้ว');
+      toast(opts.savedText);
     } catch (err) {
       toast(err.message, 'error');
     }
   }
 
   async function sendNow() {
-    const n = data?.recipients.length ?? 0;
-    if (!n) return;
-    if (!confirm(`ส่งสรุปงานตอนนี้ให้ผู้คุมงาน ${n} คน?\n(ใช้โควตาข้อความ LINE ${n} ข้อความ)`)) return;
+    if (!data?.recipients.length) return;
+    if (!confirm(opts.confirmText(data))) return;
     sendBtn.disabled = true;
     try {
-      const r = await api('/morning-summary/send', { method: 'POST' });
+      const r = await api(`${opts.endpoint}/send`, { method: 'POST' });
       if (r.failed) toast(`ส่งสำเร็จ ${r.sent} คน ไม่สำเร็จ ${r.failed} คน (ดูสาเหตุได้ในแท็บข้อความ)`, 'warn');
-      else toast(`ส่งสรุปงานให้ ${r.sent} คนแล้ว`);
+      else toast(opts.sentText(r));
       await tick(true);
     } catch (err) {
       toast(err.message, 'error');
@@ -665,6 +674,67 @@ function MorningSummaryCard() {
 
   return { el, refresh };
 }
+
+const MorningSummaryCard = () => ScheduleCard({
+  endpoint: '/morning-summary',
+  title: '🌅 สรุปงานส่งเข้า LINE ทุกเช้า',
+  enabledLabel: 'เปิดส่งสรุปอัตโนมัติทุกเช้า',
+  note: 'ส่งเฉพาะคนที่มีงานค้าง คนละ 1 ข้อความ (นับโควตา LINE OA)',
+  status: (d) => [
+    d.settings.enabled ? `ส่งเวลา ${d.settings.time} น. (${daysText(d.settings.days)})` : 'ปิดอยู่',
+    `วันนี้มีผู้รับ ${d.recipients.length} คน`,
+    d.last_sent_date ? `ส่งอัตโนมัติล่าสุด ${fmtDate(d.last_sent_date)}` : 'ยังไม่เคยส่งอัตโนมัติ',
+  ],
+  previewTitle: () => 'ตัวอย่างข้อความวันนี้',
+  emptyText: 'วันนี้ยังไม่มีใครมีงานค้าง จึงไม่มีข้อความที่จะส่ง',
+  previewItem: (r) => ({
+    summary: [
+      h('strong', {}, r.name),
+      ` · งานค้าง ${r.task_count}`,
+      r.overdue_count ? h('span', { class: 'pill danger', style: 'margin-left:6px' }, `เลยกำหนด ${r.overdue_count}`) : null,
+    ],
+    body: r.text,
+  }),
+  confirmText: (d) => `ส่งสรุปงานตอนนี้ให้ผู้คุมงาน ${d.recipients.length} คน?\n(ใช้โควตาข้อความ LINE ${d.recipients.length} ข้อความ)`,
+  sentText: (r) => `ส่งสรุปงานให้ ${r.sent} คนแล้ว`,
+  savedText: 'บันทึกการตั้งค่าสรุปงานทุกเช้าแล้ว',
+});
+
+const ReminderCard = () => ScheduleCard({
+  endpoint: '/reminders',
+  title: '⏰ เตือนงานใกล้ครบกำหนด',
+  enabledLabel: 'เปิดเตือนอัตโนมัติ',
+  extraFields: [{
+    name: 'days_before',
+    label: 'เตือนล่วงหน้า',
+    options: [[0, 'วันเดียวกับวันครบกำหนด'], [1, '1 วัน (เตือนวันก่อน)'], [2, '2 วัน'], [3, '3 วัน']],
+  }],
+  note: 'ส่งการ์ดงานพร้อมปุ่มอัปเดตสถานะ คนละ 1 ข้อความ และเตือนแต่ละงานครั้งเดียว (นับโควตา LINE OA)',
+  status: (d) => {
+    const taskCount = d.recipients.reduce((n, r) => n + r.tasks.length, 0);
+    return [
+      d.settings.enabled
+        ? `เตือนเวลา ${d.settings.time} น. (${daysText(d.settings.days)}) สำหรับงานที่ครบกำหนด${dueWhenText(d.settings.days_before)}`
+        : 'ปิดอยู่',
+      `รอบนี้ ${taskCount} งาน (${d.recipients.length} คน)`,
+      d.last_run_date ? `เตือนอัตโนมัติล่าสุด ${fmtDate(d.last_run_date)}` : 'ยังไม่เคยเตือนอัตโนมัติ',
+    ];
+  },
+  previewTitle: (d) => `งานที่จะเตือนรอบนี้ (ครบกำหนด ${fmtDate(d.target_date)})`,
+  emptyText: 'ไม่มีงานที่ต้องเตือนในรอบนี้ (หรือเตือนไปครบแล้ว)',
+  previewItem: (r) => ({
+    summary: [h('strong', {}, r.name), ` · ${r.tasks.length} งาน`],
+    body: r.tasks
+      .map((t) => `• #${t.id} ${t.title}${t.site ? ` — ${t.site}` : ''}${t.status === 'in_progress' ? ' (กำลังทำ)' : ''}`)
+      .join('\n'),
+  }),
+  confirmText: (d) => {
+    const taskCount = d.recipients.reduce((n, r) => n + r.tasks.length, 0);
+    return `ส่งเตือนตอนนี้ให้ผู้คุมงาน ${d.recipients.length} คน (${taskCount} งาน)?\n(ใช้โควตาข้อความ LINE ${d.recipients.length} ข้อความ)`;
+  },
+  sentText: (r) => `ส่งเตือนให้ ${r.sent} คนแล้ว (${r.tasks} งาน)`,
+  savedText: 'บันทึกการตั้งค่าการเตือนแล้ว',
+});
 
 // ---------------------------------------------------------------- ผู้คุมงาน
 

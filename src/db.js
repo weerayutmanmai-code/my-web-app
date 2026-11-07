@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   created_at TEXT NOT NULL
 );
 
+-- งานไหนเตือนใกล้ครบกำหนดไปแล้ว (ต่อวันกำหนดเสร็จ: ถ้าเลื่อนกำหนด จะเตือนใหม่ได้)
+CREATE TABLE IF NOT EXISTS task_reminders (
+  task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  due_date TEXT NOT NULL,
+  sent_at  TEXT NOT NULL,
+  PRIMARY KEY (task_id, due_date)
+);
+
 -- ค่าตั้งของระบบที่แก้จากหน้าเว็บได้ (เก็บเป็น JSON)
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
@@ -194,6 +202,21 @@ function createRepository(db) {
     return all(`${TASK_SELECT} WHERE t.supervisor_id = ? AND t.status != 'done' ${TASK_ORDER}`, supervisorId);
   }
 
+  /** งานค้างที่ครบกำหนดวันที่ระบุ มีผู้รับผิดชอบ และยังไม่เคยเตือนสำหรับกำหนดนี้ */
+  function listTasksToRemind(dueDate) {
+    return all(`${TASK_SELECT}
+      WHERE t.due_date = ? AND t.status != 'done' AND t.supervisor_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id = t.id AND r.due_date = t.due_date)
+      ORDER BY t.supervisor_id, t.id`, dueDate);
+  }
+
+  function markReminded(taskIds, dueDate) {
+    const at = nowIso();
+    for (const id of taskIds) {
+      run('INSERT OR IGNORE INTO task_reminders (task_id, due_date, sent_at) VALUES (?, ?, ?)', id, dueDate, at);
+    }
+  }
+
   function listSites() {
     return all(`
       SELECT DISTINCT site FROM (SELECT site FROM tasks UNION SELECT site FROM supervisors)
@@ -305,6 +328,7 @@ function createRepository(db) {
     close: () => db.close(),
     getSupervisor, getSupervisorByLineId, createSupervisor, updateSupervisor, listSupervisors,
     getTask, createTask, updateTask, deleteTask, listTasks, listOpenTasksFor, listSites,
+    listTasksToRemind, markReminded,
     getMessage, addMessage, listMessages, markRead, setMessageResolved, recentActivity, openIssues,
     markEventProcessed, getSetting, setSetting, summary,
   };

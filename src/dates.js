@@ -47,6 +47,13 @@ export function formatThaiLongDate(value) {
   });
 }
 
+/** "2026-11-07" + 1 -> "2026-11-08" */
+export function addDays(value, days) {
+  const d = new Date(`${value}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export function isOverdue(task, today = todayInBangkok()) {
   return Boolean(task?.due_date) && task.status !== 'done' && task.due_date < today;
 }

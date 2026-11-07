@@ -2,6 +2,7 @@
 import express from 'express';
 import * as M from './messages.js';
 import { isValidDateString } from './dates.js';
+import { pushToSupervisor as pushTo } from './notify.js';
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'];
 const SUPERVISOR_STATUSES = ['pending', 'active', 'inactive'];
@@ -34,7 +35,7 @@ function idParam(req) {
   return id;
 }
 
-export function createApiRouter({ db, line, morningSummary }) {
+export function createApiRouter({ db, line, morningSummary, dueReminders }) {
   const router = express.Router();
 
   const findSupervisor = (id) => {
@@ -48,22 +49,7 @@ export function createApiRouter({ db, line, morningSummary }) {
     return task;
   };
 
-  /** ส่งข้อความหาผู้คุมงานทาง LINE แล้วบันทึกลงแชท (บันทึกแม้ส่งไม่สำเร็จ พร้อมเหตุผล) */
-  async function pushToSupervisor(sup, messages, log) {
-    let error = null;
-    if (sup.status !== 'active') error = 'บัญชีผู้คุมงานยังไม่เปิดใช้งาน';
-    else if (!sup.is_following) error = 'ผู้คุมงานบล็อกบอท หรือยังไม่ได้เพิ่มบอทเป็นเพื่อน';
-    else if (line.dryRun) error = 'โหมดทดลอง: ยังไม่ได้ตั้งค่า LINE จึงไม่ได้ส่งจริง';
-    else {
-      try {
-        await line.push(sup.line_user_id, messages);
-      } catch (err) {
-        error = `ส่ง LINE ไม่สำเร็จ (${err.message})`;
-      }
-    }
-    db.addMessage({ supervisor_id: sup.id, direction: 'out', ...log, error });
-    return { pushed: !error, push_error: error };
-  }
+  const pushToSupervisor = (sup, messages, log) => pushTo({ db, line }, sup, messages, log);
 
   const notifyAssignment = (sup, task) =>
     pushToSupervisor(sup, [M.newTask(task)], {
@@ -214,6 +200,20 @@ export function createApiRouter({ db, line, morningSummary }) {
 
   router.post('/morning-summary/send', async (req, res) => {
     res.json(await morningSummary.sendAll());
+  });
+
+  // ---------- เตือนงานใกล้ครบกำหนด ----------
+  router.get('/reminders', (req, res) => {
+    res.json(dueReminders.status());
+  });
+
+  router.put('/reminders', (req, res) => {
+    dueReminders.updateSettings(req.body ?? {});
+    res.json(dueReminders.status());
+  });
+
+  router.post('/reminders/send', async (req, res) => {
+    res.json(await dueReminders.sendDue());
   });
 
   router.use((req, res) => {

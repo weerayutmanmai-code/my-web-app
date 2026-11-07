@@ -188,6 +188,30 @@ test('สรุปงานทุกเช้า: ดูค่าตั้ง �
   assert.ok(ctx.line.calls.push.some((p) => p.to === 'UM' && /งานสำหรับสรุปเช้า/.test(p.messages[0].text)));
 });
 
+test('เตือนงานใกล้ครบกำหนด: ดูค่าตั้ง แก้ค่าตั้ง และกดส่งทันที', async () => {
+  const sup = await activeSupervisor(ctx, 'UD');
+  const status = await api('/reminders');
+  assert.equal(status.status, 200);
+  assert.deepEqual(status.data.settings, { enabled: true, time: '16:00', days: [0, 1, 2, 3, 4, 5, 6], days_before: 1 });
+
+  // สร้างงานที่ครบกำหนดตรงกับวันที่ระบบจะเตือน
+  ctx.db.createTask({ title: 'งานใกล้ครบกำหนด', supervisor_id: sup.id, due_date: status.data.target_date });
+  const again = await api('/reminders');
+  const mine = again.data.recipients.find((r) => r.supervisor_id === sup.id);
+  assert.equal(mine.tasks[0].title, 'งานใกล้ครบกำหนด');
+
+  assert.equal((await api('/reminders', { method: 'PUT', body: { days_before: 5 } })).status, 400);
+  const updated = await api('/reminders', { method: 'PUT', body: { time: '15:30', days_before: 2 } });
+  assert.equal(updated.data.settings.time, '15:30');
+  assert.equal(updated.data.settings.days_before, 2);
+  await api('/reminders', { method: 'PUT', body: { days_before: 1 } });
+
+  const sent = await api('/reminders/send', { method: 'POST' });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.tasks >= 1);
+  assert.ok(ctx.line.calls.push.some((p) => p.to === 'UD' && /งานใกล้ครบกำหนด/.test(JSON.stringify(p.messages))));
+});
+
 test('ปิดเรื่องปัญหา และอ่านข้อความแล้ว', async () => {
   const sup = await activeSupervisor(ctx, 'UI');
   await ctx.bot.handleEvent(ev.text('แจ้งปัญหา น้ำไม่ไหล', 'UI'));
