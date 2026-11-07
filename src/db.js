@@ -327,7 +327,8 @@ function createRepository(db) {
   const MESSAGE_SELECT = `
     SELECT m.*,
       CASE WHEN s.id IS NULL THEN COALESCE(m.sender_name, 'สมาชิกกลุ่ม') ELSE ${DISPLAY_NAME} END AS supervisor_name,
-      g.name AS group_name, t.title AS task_title
+      g.name AS group_name, t.title AS task_title,
+      COALESCE(g.site, t.site, s.site) AS site
     FROM messages m
     LEFT JOIN supervisors s ON s.id = m.supervisor_id
     LEFT JOIN line_groups g ON g.id = m.group_id
@@ -411,6 +412,15 @@ function createRepository(db) {
     return all(`${TASK_SELECT} WHERE t.done_at >= ? AND t.done_at < ? ORDER BY t.done_at`, startIso, endIso);
   }
 
+  /** งานที่ "ยังทำอยู่" ในช่วงเวลา: สร้างก่อนสิ้นช่วง และยังไม่เสร็จหรือเสร็จหลังต้นช่วง */
+  function listTasksActiveBetween(startIso, endIso) {
+    return all(
+      `${TASK_SELECT} WHERE t.created_at < ? AND (t.done_at IS NULL OR t.done_at >= ?)
+       ORDER BY t.site, t.due_date IS NULL, t.due_date, t.id`,
+      endIso, startIso,
+    );
+  }
+
   function listOpenTasksDueBefore(date) {
     return all(`${TASK_SELECT} WHERE t.status != 'done' AND t.due_date < ? ORDER BY t.due_date, t.id`, date);
   }
@@ -473,7 +483,7 @@ function createRepository(db) {
     getTask, createTask, updateTask, deleteTask, listTasks, listOpenTasksFor, listSites,
     listTasksToRemind, markReminded,
     getMessage, addMessage, listMessages, listGroupMessages, markRead, markGroupRead, setMessageResolved, recentActivity, openIssues,
-    listTasksDoneBetween, listOpenTasksDueBefore, listOpenTasksDueOn, listInboundBetween,
+    listTasksDoneBetween, listTasksActiveBetween, listOpenTasksDueBefore, listOpenTasksDueOn, listInboundBetween,
     markEventProcessed, getSetting, setSetting, summary,
   };
 }

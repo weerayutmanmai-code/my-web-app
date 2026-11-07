@@ -65,7 +65,7 @@ export function createApp({
   });
 
   app.use(basicAuth(config));
-  app.use('/api', express.json({ limit: '100kb' }), createApiRouter({ db, line, ...schedules }));
+  app.use('/api', express.json({ limit: '100kb' }), createApiRouter({ db, line, ...schedules, publicUrl: config.publicUrl }));
   app.use('/uploads', express.static(config.uploadDir, { index: false, fallthrough: false, maxAge: '7d' }));
   app.use(express.static(PUBLIC_DIR, { index: 'index.html' }));
 

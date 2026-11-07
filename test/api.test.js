@@ -270,6 +270,20 @@ test('กลุ่ม LINE: อนุมัติ/ผูกหน้างาน
   assert.equal((await api('/groups')).data.find((g) => g.id === group.id).unread, 0);
 });
 
+test('ดาวน์โหลด Excel: ไฟล์ xlsx ชื่อภาษาไทย และตรวจช่วงวันที่', async () => {
+  const res = await fetch(`${base}/api/export.xlsx?from=2026-11-01&to=2026-11-30`, { headers: { authorization: auth } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.match(res.headers.get('content-disposition'), /attachment; filename=.*filename\*=UTF-8''/);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  assert.equal(bytes.subarray(0, 2).toString(), 'PK', 'เป็นไฟล์ zip (xlsx)');
+
+  const bad = await fetch(`${base}/api/export.xlsx?from=2026-11-30&to=2026-11-01`, { headers: { authorization: auth } });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /วันที่เริ่ม/);
+  assert.equal((await fetch(`${base}/api/export.xlsx?from=2026-11-01&to=2026-11-30`)).status, 401);
+});
+
 test('ปิดเรื่องปัญหา และอ่านข้อความแล้ว', async () => {
   const sup = await activeSupervisor(ctx, 'UI');
   await ctx.bot.handleEvent(ev.text('แจ้งปัญหา น้ำไม่ไหล', 'UI'));
