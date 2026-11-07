@@ -19,7 +19,7 @@ const MAX_LISTED_TASKS = 20;
 export const validateSettings = (input) => validateSchedule(input);
 
 /** ข้อความสรุปงานของผู้คุมงานหนึ่งคน (null = ไม่มีงานค้าง ไม่ต้องส่ง) */
-export function buildSummaryText(sup, tasks, today) {
+export function buildSummaryText(sup, tasks, today, { greeting = '🌅 สวัสดีตอนเช้าครับ' } = {}) {
   const open = tasks.filter((t) => t.status !== 'done');
   if (!open.length) return null;
 
@@ -48,7 +48,7 @@ export function buildSummaryText(sup, tasks, today) {
 
   const name = M.nameOf(sup);
   const body = [
-    `🌅 สวัสดีตอนเช้าครับ${name ? ` คุณ${name}` : ''}`,
+    `${greeting}${name ? ` คุณ${name}` : ''}`,
     `สรุปงาน${formatThaiLongDate(today)}`,
     ...section('🔴 เลยกำหนด', overdue, { showDue: true }),
     ...section('🟡 ครบกำหนดวันนี้', dueToday, { showDue: false }),

@@ -54,6 +54,14 @@ export function addDays(value, days) {
   return d.toISOString().slice(0, 10);
 }
 
+/** ช่วงเวลาของวันหนึ่งตามเวลาไทย เป็น ISO (UTC) สำหรับเทียบกับ created_at/done_at ในฐานข้อมูล */
+export function bangkokDayRange(value) {
+  return {
+    start: new Date(`${value}T00:00:00+07:00`).toISOString(),
+    end: new Date(`${addDays(value, 1)}T00:00:00+07:00`).toISOString(),
+  };
+}
+
 export function isOverdue(task, today = todayInBangkok()) {
   return Boolean(task?.due_date) && task.status !== 'done' && task.due_date < today;
 }

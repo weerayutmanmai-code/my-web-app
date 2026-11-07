@@ -5,6 +5,7 @@ import { createBot } from './bot.js';
 import { createApp } from './app.js';
 import { createMorningSummary } from './morning-summary.js';
 import { createDueReminders } from './reminders.js';
+import { createOfficeSummary } from './office-summary.js';
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
@@ -12,8 +13,9 @@ const line = createLineClient({ channelAccessToken: config.lineChannelAccessToke
 const bot = createBot({ db, line, config });
 const morningSummary = createMorningSummary({ db, line });
 const dueReminders = createDueReminders({ db, line });
-const app = createApp({ db, line, bot, config, morningSummary, dueReminders });
-const stopSchedules = [morningSummary.start(), dueReminders.start()];
+const officeSummary = createOfficeSummary({ db, line, config });
+const app = createApp({ db, line, bot, config, morningSummary, dueReminders, officeSummary });
+const stopSchedules = [morningSummary.start(), dueReminders.start(), officeSummary.start()];
 
 const server = app.listen(config.port, () => {
   console.log(`🚀 เว็บสำนักงาน: http://localhost:${config.port}`);

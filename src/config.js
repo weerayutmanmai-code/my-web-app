@@ -12,6 +12,8 @@ export function loadConfig(env = process.env) {
     dbPath: env.DB_PATH || path.join(dataDir, 'app.db'),
     uploadDir: path.join(dataDir, 'uploads'),
     autoApprove: /^(1|true|yes)$/i.test(env.AUTO_APPROVE || ''),
+    // ลิงก์หน้าเว็บที่แนบในสรุปของสำนักงาน (Railway ตั้ง RAILWAY_PUBLIC_DOMAIN ให้เองเมื่อสร้างโดเมน)
+    publicUrl: (env.PUBLIC_URL || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/+$/, ''),
     production: env.NODE_ENV === 'production',
   };
 
