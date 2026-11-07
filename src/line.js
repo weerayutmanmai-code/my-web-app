@@ -79,6 +79,20 @@ export function createLineClient({ channelAccessToken, fetchImpl = globalThis.fe
       return res.json();
     },
 
+    /** ชื่อและรูปของกลุ่ม */
+    async getGroupSummary(groupId) {
+      if (dryRun) return null;
+      const res = await request(`${API}/group/${encodeURIComponent(groupId)}/summary`);
+      return res.json();
+    },
+
+    /** ชื่อของสมาชิกในกลุ่ม (ใช้ได้แม้คนนั้นยังไม่ได้เพิ่มเพื่อนบอท) */
+    async getGroupMemberProfile(groupId, userId) {
+      if (dryRun) return null;
+      const res = await request(`${API}/group/${encodeURIComponent(groupId)}/member/${encodeURIComponent(userId)}`);
+      return res.json();
+    },
+
     /** ดาวน์โหลดไฟล์ (รูป) ที่ผู้ใช้ส่งมา */
     async getContent(messageId) {
       if (dryRun) throw new Error('โหมดทดลอง: ยังไม่ได้ตั้งค่า LINE_CHANNEL_ACCESS_TOKEN จึงดาวน์โหลดรูปไม่ได้');

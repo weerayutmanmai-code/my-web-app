@@ -19,7 +19,7 @@ const MAX_LISTED_TASKS = 20;
 export const validateSettings = (input) => validateSchedule(input);
 
 /** ข้อความสรุปงานของผู้คุมงานหนึ่งคน (null = ไม่มีงานค้าง ไม่ต้องส่ง) */
-export function buildSummaryText(sup, tasks, today, { greeting = '🌅 สวัสดีตอนเช้าครับ' } = {}) {
+export function buildSummaryText(sup, tasks, today, { greeting = '🌅 สวัสดีตอนเช้าครับ', showAssignee = false } = {}) {
   const open = tasks.filter((t) => t.status !== 'done');
   if (!open.length) return null;
 
@@ -34,7 +34,8 @@ export function buildSummaryText(sup, tasks, today, { greeting = '🌅 สวั
     const extras = [];
     if (showDue && t.due_date) extras.push(`กำหนด ${formatThaiDate(t.due_date)}`);
     if (t.status === 'in_progress') extras.push('▶️ กำลังทำ');
-    return `• #${t.id} ${t.title}${extras.length ? ` (${extras.join(' · ')})` : ''}`;
+    const owner = showAssignee ? ` — ${t.supervisor_name ?? 'ยังไม่มีผู้รับผิดชอบ'}` : '';
+    return `• #${t.id} ${t.title}${owner}${extras.length ? ` (${extras.join(' · ')})` : ''}`;
   };
   const section = (title, list, opts) => {
     if (!list.length) return [];

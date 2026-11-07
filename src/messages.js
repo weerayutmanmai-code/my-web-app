@@ -38,6 +38,17 @@ export function mainQuickReply() {
   };
 }
 
+/** ปุ่มลัดในกลุ่ม: เฉพาะคำสั่งที่ใช้ในกลุ่มได้ */
+export function groupQuickReply() {
+  return {
+    items: [
+      qMessage('📋 งาน', 'งาน'),
+      qMessage('📊 สรุป', 'สรุป'),
+      qMessage('❓ เมนู', 'เมนู'),
+    ],
+  };
+}
+
 export function text(body, quickReply) {
   const msg = { type: 'text', text: clip(body, 5000) };
   if (quickReply) msg.quickReply = quickReply;
@@ -122,12 +133,13 @@ const postbackButton = (label, data, displayText, style = 'secondary') => ({
   action: { type: 'postback', label, data: new URLSearchParams(data).toString(), displayText },
 });
 
-export function taskBubble(task, { heading } = {}) {
+export function taskBubble(task, { heading, showAssignee = false } = {}) {
   const overdue = isOverdue(task);
   const body = [];
   if (heading) body.push({ type: 'text', text: heading, size: 'xs', color: GREEN, weight: 'bold' });
   body.push({ type: 'text', text: clip(`#${task.id} ${task.title}`, 200), weight: 'bold', size: 'md', wrap: true });
   if (task.site) body.push(smallText(`📍 ${clip(task.site, 200)}`));
+  if (showAssignee) body.push(smallText(`👷 ${task.supervisor_name ? clip(task.supervisor_name, 100) : 'ยังไม่มีผู้รับผิดชอบ'}`));
   if (task.due_date) {
     body.push(smallText(`📅 กำหนดเสร็จ ${formatThaiDate(task.due_date)}${overdue ? ' (เลยกำหนด)' : ''}`, overdue ? RED : undefined));
   }
@@ -160,29 +172,71 @@ export function taskBubble(task, { heading } = {}) {
 
 const MAX_BUBBLES = 12;
 
-export function taskList(tasks) {
+export function taskList(tasks, { owner = 'คุณ', showAssignee = false, quickReply = mainQuickReply() } = {}) {
   const shown = tasks.slice(0, MAX_BUBBLES);
   const intro =
     tasks.length > MAX_BUBBLES
-      ? `📋 คุณมีงานค้าง ${tasks.length} งาน (แสดง ${MAX_BUBBLES} งานที่ใกล้กำหนดที่สุด)`
-      : `📋 คุณมีงานค้าง ${tasks.length} งาน ปัดซ้าย-ขวาเพื่อดู แล้วกดปุ่มเพื่ออัปเดตครับ`;
+      ? `📋 ${owner}มีงานค้าง ${tasks.length} งาน (แสดง ${MAX_BUBBLES} งานที่ใกล้กำหนดที่สุด)`
+      : `📋 ${owner}มีงานค้าง ${tasks.length} งาน ปัดซ้าย-ขวาเพื่อดู แล้วกดปุ่มเพื่ออัปเดตครับ`;
   return [
     text(intro),
     {
       type: 'flex',
-      altText: `งานของคุณ ${tasks.length} รายการ`,
-      contents: { type: 'carousel', contents: shown.map((t) => taskBubble(t)) },
-      quickReply: mainQuickReply(),
+      altText: `งานค้าง ${tasks.length} รายการ`,
+      contents: { type: 'carousel', contents: shown.map((t) => taskBubble(t, { showAssignee })) },
+      quickReply,
     },
   ];
 }
 
-export function newTask(task) {
+export function newTask(task, { showAssignee = false } = {}) {
   return {
     type: 'flex',
     altText: clip(`📋 งานใหม่: ${task.title}`, 400),
-    contents: taskBubble(task, { heading: '📋 งานใหม่จากสำนักงาน' }),
+    contents: taskBubble(task, { heading: '📋 งานใหม่จากสำนักงาน', showAssignee }),
   };
+}
+
+// ---------- กลุ่ม LINE ----------
+const GROUP_COMMANDS = [
+  '📋 "งาน" — ดูงานค้างของหน้างานนี้ กดปุ่มบนการ์ดเพื่ออัปเดต (เฉพาะผู้รับผิดชอบ/สำนักงาน)',
+  '📊 "สรุป" — สรุปงานของหน้างานนี้',
+  '📝 "รายงาน ..." — ส่งรายงานประจำวัน (พิมพ์ในข้อความเดียว)',
+  '🚨 "แจ้งปัญหา ..." — แจ้งปัญหาถึงสำนักงาน',
+];
+
+export function groupWelcome() {
+  return text(
+    [
+      'สวัสดีครับ 👷 บอทประสานงานหน้างานเข้ากลุ่มแล้ว',
+      'รอสำนักงานเชื่อมกลุ่มนี้กับหน้างานสักครู่ จากนั้นใช้คำสั่งได้เลย:',
+      '',
+      ...GROUP_COMMANDS,
+      '',
+      '🔒 บอทไม่เก็บแชทปกติในกลุ่ม เก็บเฉพาะคำสั่งข้างบนครับ',
+    ].join('\n'),
+  );
+}
+
+export function groupMenu(group) {
+  return text(
+    [
+      `👥 เมนูกลุ่ม${group.site ? ` — หน้างาน ${group.site}` : ''}`,
+      '',
+      ...GROUP_COMMANDS,
+      '',
+      '🔒 บอทไม่เก็บแชทปกติในกลุ่ม เก็บเฉพาะคำสั่งข้างบนครับ',
+    ].join('\n'),
+    groupQuickReply(),
+  );
+}
+
+export function groupNotActive(group) {
+  return text(
+    group.status === 'inactive'
+      ? 'กลุ่มนี้ถูกปิดการใช้งานบอทอยู่ครับ กรุณาติดต่อสำนักงาน'
+      : '⏳ กลุ่มนี้ยังรอสำนักงานอนุมัติและผูกกับหน้างานครับ',
+  );
 }
 
 const dueWhen = (daysBefore) =>

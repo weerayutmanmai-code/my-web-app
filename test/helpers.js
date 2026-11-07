@@ -24,6 +24,12 @@ export function fakeLine({ dryRun = false } = {}) {
     async getProfile(userId) {
       return { userId, displayName: `ช่าง-${userId}`, pictureUrl: 'https://profile.line-scdn.net/example' };
     },
+    async getGroupSummary(groupId) {
+      return { groupId, groupName: `กลุ่ม-${groupId}`, pictureUrl: 'https://profile.line-scdn.net/group' };
+    },
+    async getGroupMemberProfile(groupId, userId) {
+      return { userId, displayName: `สมาชิก-${userId}` };
+    },
     async getContent() {
       return { buffer: Buffer.from('fake-jpeg-bytes'), contentType: 'image/jpeg' };
     },
