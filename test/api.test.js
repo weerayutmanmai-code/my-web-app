@@ -165,6 +165,29 @@ test('LINE ส่งไม่สำเร็จ: บันทึกข้อผ�
   }
 });
 
+test('สรุปงานทุกเช้า: ดูค่าตั้ง แก้ค่าตั้ง และกดส่งทันที', async () => {
+  const sup = await activeSupervisor(ctx, 'UM');
+  ctx.db.createTask({ title: 'งานสำหรับสรุปเช้า', supervisor_id: sup.id });
+
+  const status = await api('/morning-summary');
+  assert.equal(status.status, 200);
+  assert.deepEqual(status.data.settings, { enabled: true, time: '07:30', days: [1, 2, 3, 4, 5, 6] });
+  const mine = status.data.recipients.find((r) => r.supervisor_id === sup.id);
+  assert.match(mine.text, /งานสำหรับสรุปเช้า/);
+
+  const bad = await api('/morning-summary', { method: 'PUT', body: { time: '25:00' } });
+  assert.equal(bad.status, 400);
+
+  const updated = await api('/morning-summary', { method: 'PUT', body: { time: '06:45', days: [1, 3, 5] } });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(updated.data.settings, { enabled: true, time: '06:45', days: [1, 3, 5] });
+
+  const sent = await api('/morning-summary/send', { method: 'POST' });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.sent >= 1);
+  assert.ok(ctx.line.calls.push.some((p) => p.to === 'UM' && /งานสำหรับสรุปเช้า/.test(p.messages[0].text)));
+});
+
 test('ปิดเรื่องปัญหา และอ่านข้อความแล้ว', async () => {
   const sup = await activeSupervisor(ctx, 'UI');
   await ctx.bot.handleEvent(ev.text('แจ้งปัญหา น้ำไม่ไหล', 'UI'));

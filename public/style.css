@@ -188,6 +188,23 @@ label.check input { width: auto; }
 .task-controls { display: grid; grid-template-columns: 130px 170px auto; gap: 8px; align-items: center; }
 .task-controls select { padding: 5px 8px; font-size: .88rem; }
 
+/* ---------- สรุปงานทุกเช้า ---------- */
+.summary-details { margin-top: 12px; }
+.summary-details > summary { cursor: pointer; color: var(--blue); font-size: .9rem; }
+.summary-details[open] > summary { margin-bottom: 12px; }
+.summary-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+.summary-row > label { width: 160px; }
+fieldset.days { display: flex; gap: 4px 14px; flex-wrap: wrap; margin: 0; padding: 6px 12px 8px; border: 1px solid var(--border); border-radius: 8px; }
+fieldset.days legend { font-size: .88rem; color: var(--muted); font-weight: 500; padding: 0 4px; }
+.summary-sub { font-size: .95rem; font-weight: 600; margin: 18px 0 8px; }
+.summary-recipients { display: grid; gap: 8px; }
+.summary-preview { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+.summary-preview > summary { cursor: pointer; }
+.summary-preview pre {
+  margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--green-soft);
+  font: inherit; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
 /* ---------- ผู้คุมงาน ---------- */
 .sup-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
 .sup-card { display: grid; gap: 10px; }

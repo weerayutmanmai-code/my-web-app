@@ -34,7 +34,7 @@ function idParam(req) {
   return id;
 }
 
-export function createApiRouter({ db, line }) {
+export function createApiRouter({ db, line, morningSummary }) {
   const router = express.Router();
 
   const findSupervisor = (id) => {
@@ -200,6 +200,20 @@ export function createApiRouter({ db, line }) {
     const id = idParam(req);
     if (!db.getMessage(id)) throw new HttpError(404, 'ไม่พบข้อความ');
     res.json(db.setMessageResolved(id, Boolean(req.body?.resolved)));
+  });
+
+  // ---------- สรุปงานทุกเช้า ----------
+  router.get('/morning-summary', (req, res) => {
+    res.json(morningSummary.status());
+  });
+
+  router.put('/morning-summary', (req, res) => {
+    morningSummary.updateSettings(req.body ?? {});
+    res.json(morningSummary.status());
+  });
+
+  router.post('/morning-summary/send', async (req, res) => {
+    res.json(await morningSummary.sendAll());
   });
 
   router.use((req, res) => {
