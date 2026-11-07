@@ -233,6 +233,43 @@ test('ตั้งคนเป็นสำนักงาน แล้วดู/
   assert.ok(ctx.line.calls.push.some((p) => p.to === 'UOF' && /สรุปภาพรวม/.test(p.messages[0].text)));
 });
 
+test('กลุ่ม LINE: อนุมัติ/ผูกหน้างาน ส่งข้อความเข้ากลุ่ม และส่งการ์ดงานเข้ากลุ่ม', async () => {
+  await ctx.bot.handleEvent({ type: 'join', replyToken: 'rt', source: { type: 'group', groupId: 'CAPI' }, webhookEventId: 'join-capi' });
+  const group = (await api('/groups')).data.find((g) => g.line_group_id === 'CAPI');
+  assert.equal(group.status, 'pending');
+
+  // ยังไม่อนุมัติ: ส่งไม่ได้
+  const blocked = await api(`/groups/${group.id}/messages`, { method: 'POST', body: { text: 'ทดสอบ' } });
+  assert.equal(blocked.data.pushed, false);
+
+  assert.equal((await api(`/groups/${group.id}`, { method: 'PATCH', body: { status: 'nope' } })).status, 400);
+  const patched = await api(`/groups/${group.id}`, { method: 'PATCH', body: { status: 'active', site: 'ไซต์ API' } });
+  assert.equal(patched.data.group.site, 'ไซต์ API');
+
+  const sent = await api(`/groups/${group.id}/messages`, { method: 'POST', body: { text: 'พรุ่งนี้ของเข้า 8 โมง' } });
+  assert.equal(sent.data.pushed, true);
+  assert.equal(ctx.line.calls.push.at(-1).to, 'CAPI');
+
+  const sup = await activeSupervisor(ctx, 'UGRP');
+  const task = await api('/tasks', {
+    method: 'POST',
+    body: { title: 'งานเข้ากลุ่ม', site: 'ไซต์ API', supervisor_id: sup.id, notify_group: true },
+  });
+  assert.equal(task.data.groups.length, 1);
+  assert.equal(task.data.groups[0].pushed, true);
+  const groupPush = ctx.line.calls.push.find((p) => p.to === 'CAPI' && /งานเข้ากลุ่ม/.test(JSON.stringify(p.messages)));
+  assert.ok(groupPush, 'ส่งการ์ดเข้ากลุ่ม');
+  assert.match(JSON.stringify(groupPush.messages), /👷/, 'การ์ดในกลุ่มบอกชื่อผู้รับผิดชอบ');
+
+  const noGroup = await api('/tasks', { method: 'POST', body: { title: 'ไม่ส่งกลุ่ม', site: 'ไซต์ API' } });
+  assert.deepEqual(noGroup.data.groups, []);
+
+  const thread = await api(`/groups/${group.id}/messages`);
+  assert.ok(thread.data.some((m) => m.direction === 'out' && m.kind === 'task'));
+  await api(`/groups/${group.id}/read`, { method: 'POST' });
+  assert.equal((await api('/groups')).data.find((g) => g.id === group.id).unread, 0);
+});
+
 test('ปิดเรื่องปัญหา และอ่านข้อความแล้ว', async () => {
   const sup = await activeSupervisor(ctx, 'UI');
   await ctx.bot.handleEvent(ev.text('แจ้งปัญหา น้ำไม่ไหล', 'UI'));

@@ -28,6 +28,8 @@ function listSection(title, items, format) {
 }
 
 const who = (name) => (name ? ` — ${name}` : '');
+/** ชื่อคนส่ง + กลุ่ม (ถ้าส่งมาจากกลุ่ม LINE) */
+const from = (m) => (m.group_name ? `${m.supervisor_name} (กลุ่ม ${m.group_name})` : m.supervisor_name);
 
 /**
  * สร้างสรุปภาพรวม
@@ -62,7 +64,7 @@ export function buildOfficeSummary({ db, now = new Date(), publicUrl = '' }) {
     ...listSection(
       `📝 รายงานประจำวัน ${reported.size}/${crew.length} คน`,
       reports,
-      (m) => `• ${m.supervisor_name}: ${snippet(m.text)}`,
+      (m) => `• ${from(m)}: ${snippet(m.text)}`,
     ),
   ];
   if (notReported.length) {
@@ -73,7 +75,7 @@ export function buildOfficeSummary({ db, now = new Date(), publicUrl = '' }) {
     ...listSection(
       `🚨 ปัญหาใหม่${dayWord} ${issues.length} เรื่อง (ยังไม่ปิดทั้งหมด ${s.open_issues} เรื่อง)`,
       issues,
-      (m) => `• ${m.supervisor_name}: ${snippet(m.text)}`,
+      (m) => `• ${from(m)}: ${snippet(m.text)}`,
     ),
   );
   if (!issues.length && s.open_issues) lines.push('', `🚨 ปัญหาที่ยังไม่ปิด ${s.open_issues} เรื่อง`);

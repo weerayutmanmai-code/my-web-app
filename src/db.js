@@ -3,6 +3,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { todayInBangkok } from './dates.js';
 
+/**
+ * ทุกอย่างที่วิ่งผ่านบอท: ข้อความ รายงาน ปัญหา รูป ตำแหน่ง อัปเดตงาน และข้อความจากสำนักงาน
+ * แชทรายคน: supervisor_id มีค่า, group_id = NULL
+ * แชทกลุ่ม: group_id มีค่า, supervisor_id = คนส่ง (ถ้าเป็นผู้คุมงานที่รู้จัก), sender_name = ชื่อคนส่ง
+ */
+const messagesTable = (name) => `CREATE TABLE IF NOT EXISTS ${name} (
+  id              INTEGER PRIMARY KEY,
+  supervisor_id   INTEGER REFERENCES supervisors(id) ON DELETE CASCADE,
+  group_id        INTEGER REFERENCES line_groups(id) ON DELETE CASCADE,
+  sender_name     TEXT,
+  direction       TEXT NOT NULL,                      -- in (จากหน้างาน) | out (จากสำนักงาน)
+  kind            TEXT NOT NULL,                      -- text | report | issue | image | location | status | task | system | summary | reminder
+  text            TEXT,
+  task_id         INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  image_path      TEXT,
+  latitude        REAL,
+  longitude       REAL,
+  line_message_id TEXT,
+  error           TEXT,
+  resolved        INTEGER NOT NULL DEFAULT 0,
+  read_at         TEXT,
+  created_at      TEXT NOT NULL
+);`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS supervisors (
   id               INTEGER PRIMARY KEY,
@@ -35,28 +59,20 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at    TEXT NOT NULL
 );
 
--- ทุกอย่างที่วิ่งผ่านบอท: ข้อความ รายงาน ปัญหา รูป ตำแหน่ง อัปเดตงาน และข้อความจากสำนักงาน
-CREATE TABLE IF NOT EXISTS messages (
-  id              INTEGER PRIMARY KEY,
-  supervisor_id   INTEGER NOT NULL REFERENCES supervisors(id) ON DELETE CASCADE,
-  direction       TEXT NOT NULL,                      -- in (จากผู้คุมงาน) | out (จากสำนักงาน)
-  kind            TEXT NOT NULL,                      -- text | report | issue | image | location | status | task | system
-  text            TEXT,
-  task_id         INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
-  image_path      TEXT,
-  latitude        REAL,
-  longitude       REAL,
-  line_message_id TEXT,
-  error           TEXT,
-  resolved        INTEGER NOT NULL DEFAULT 0,
-  read_at         TEXT,
-  created_at      TEXT NOT NULL
+-- กลุ่ม LINE ที่บอทอยู่ (ผูกกับหน้างานได้)
+CREATE TABLE IF NOT EXISTS line_groups (
+  id            INTEGER PRIMARY KEY,
+  line_group_id TEXT NOT NULL UNIQUE,
+  name          TEXT,
+  picture_url   TEXT,
+  site          TEXT,
+  status        TEXT NOT NULL DEFAULT 'pending',      -- pending | active | inactive
+  is_member     INTEGER NOT NULL DEFAULT 1,           -- บอทยังอยู่ในกลุ่มไหม
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_supervisor ON messages (supervisor_id, id);
-CREATE INDEX IF NOT EXISTS idx_messages_kind ON messages (kind, resolved);
-CREATE INDEX IF NOT EXISTS idx_messages_task ON messages (task_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_supervisor ON tasks (supervisor_id, status);
+${messagesTable('messages')}
 
 -- กันประมวลผลซ้ำเมื่อ LINE ส่ง webhook เดิมซ้ำ (redelivery)
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -80,10 +96,20 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
+// สร้างหลังจาก migrate() เพราะฐานข้อมูลเดิมอาจยังไม่มีคอลัมน์ใหม่
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_messages_supervisor ON messages (supervisor_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_group ON messages (group_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_kind ON messages (kind, resolved);
+CREATE INDEX IF NOT EXISTS idx_messages_task ON messages (task_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_supervisor ON tasks (supervisor_id, status);
+`;
+
 const SUPERVISOR_FIELDS = [
   'line_name', 'picture_url', 'name', 'phone', 'site', 'status', 'role', 'is_following',
   'pending_action', 'photo_task_id', 'photo_task_until',
 ];
+const GROUP_FIELDS = ['name', 'picture_url', 'site', 'status', 'is_member'];
 const TASK_FIELDS = ['title', 'detail', 'site', 'supervisor_id', 'due_date', 'status', 'done_at'];
 
 const DISPLAY_NAME = `COALESCE(NULLIF(TRIM(s.name), ''), s.line_name, 'ผู้ใช้ LINE')`;
@@ -97,6 +123,7 @@ export function openDatabase(filename = ':memory:') {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
   db.exec(SCHEMA);
   migrate(db);
+  db.exec(INDEXES);
   return createRepository(db);
 }
 
@@ -105,6 +132,28 @@ function migrate(db) {
   const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!columns('supervisors').includes('role')) {
     db.exec(`ALTER TABLE supervisors ADD COLUMN role TEXT NOT NULL DEFAULT 'supervisor'`);
+  }
+  // รองรับกลุ่ม LINE: supervisor_id ต้องว่างได้ + เพิ่ม group_id/sender_name
+  // SQLite แก้ NOT NULL ของคอลัมน์เดิมไม่ได้ จึงสร้างตารางใหม่แล้วคัดลอกข้อมูลทั้งหมด
+  if (!columns('messages').includes('group_id')) {
+    const keep = [
+      'id', 'supervisor_id', 'direction', 'kind', 'text', 'task_id', 'image_path', 'latitude', 'longitude',
+      'line_message_id', 'error', 'resolved', 'read_at', 'created_at',
+    ].join(', ');
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec('BEGIN');
+      db.exec(messagesTable('messages_new'));
+      db.exec(`INSERT INTO messages_new (${keep}) SELECT ${keep} FROM messages`);
+      db.exec('DROP TABLE messages');
+      db.exec('ALTER TABLE messages_new RENAME TO messages');
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
   }
 }
 
@@ -151,12 +200,47 @@ function createRepository(db) {
   function listSupervisors() {
     return all(`
       SELECT s.*, ${DISPLAY_NAME} AS display_name,
-        (SELECT COUNT(*) FROM messages m WHERE m.supervisor_id = s.id AND m.direction = 'in' AND m.read_at IS NULL) AS unread,
-        (SELECT MAX(m.created_at) FROM messages m WHERE m.supervisor_id = s.id) AS last_message_at,
+        (SELECT COUNT(*) FROM messages m
+          WHERE m.supervisor_id = s.id AND m.group_id IS NULL AND m.direction = 'in' AND m.read_at IS NULL) AS unread,
+        (SELECT MAX(m.created_at) FROM messages m WHERE m.supervisor_id = s.id AND m.group_id IS NULL) AS last_message_at,
         (SELECT COUNT(*) FROM tasks t WHERE t.supervisor_id = s.id AND t.status != 'done') AS open_tasks
       FROM supervisors s
       ORDER BY last_message_at DESC NULLS LAST, s.id DESC
     `);
+  }
+
+  // ---------- กลุ่ม LINE ----------
+  const getGroup = (id) => get('SELECT * FROM line_groups WHERE id = ?', id);
+  const getGroupByLineId = (lineGroupId) => get('SELECT * FROM line_groups WHERE line_group_id = ?', lineGroupId);
+
+  function createGroup({ line_group_id, name = null, picture_url = null, status = 'pending', created_at = nowIso() }) {
+    const r = run(
+      `INSERT INTO line_groups (line_group_id, name, picture_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      line_group_id, name, picture_url, status, created_at, created_at,
+    );
+    return getGroup(Number(r.lastInsertRowid));
+  }
+
+  function updateGroup(id, fields) {
+    updateRow('line_groups', GROUP_FIELDS, id, fields);
+    return getGroup(id);
+  }
+
+  function listGroups() {
+    return all(`
+      SELECT g.*,
+        (SELECT COUNT(*) FROM messages m WHERE m.group_id = g.id AND m.direction = 'in' AND m.read_at IS NULL) AS unread,
+        (SELECT MAX(m.created_at) FROM messages m WHERE m.group_id = g.id) AS last_message_at,
+        (SELECT COUNT(*) FROM tasks t WHERE g.site IS NOT NULL AND t.site = g.site AND t.status != 'done') AS open_tasks
+      FROM line_groups g
+      ORDER BY last_message_at DESC NULLS LAST, g.id DESC
+    `);
+  }
+
+  /** กลุ่มที่ใช้งานอยู่ บอทยังอยู่ในกลุ่ม และผูกกับหน้างานนี้ */
+  function listActiveGroupsForSite(site) {
+    if (!site) return [];
+    return all(`SELECT * FROM line_groups WHERE site = ? AND status = 'active' AND is_member = 1 ORDER BY id`, site);
   }
 
   // ---------- งาน ----------
@@ -208,6 +292,10 @@ function createRepository(db) {
     return all(`${TASK_SELECT} ${clause} ${TASK_ORDER}`, ...params);
   }
 
+  function listOpenTasksForSite(site) {
+    return all(`${TASK_SELECT} WHERE t.site = ? AND t.status != 'done' ${TASK_ORDER}`, site);
+  }
+
   function listOpenTasksFor(supervisorId) {
     return all(`${TASK_SELECT} WHERE t.supervisor_id = ? AND t.status != 'done' ${TASK_ORDER}`, supervisorId);
   }
@@ -235,10 +323,14 @@ function createRepository(db) {
   }
 
   // ---------- ข้อความ / ไทม์ไลน์ ----------
+  // supervisor_name = ชื่อคนส่ง/คนรับ (ผู้คุมงานที่รู้จัก หรือชื่อในกลุ่ม), group_name = ชื่อกลุ่ม (ถ้าเป็นแชทกลุ่ม)
   const MESSAGE_SELECT = `
-    SELECT m.*, ${DISPLAY_NAME} AS supervisor_name, t.title AS task_title
+    SELECT m.*,
+      CASE WHEN s.id IS NULL THEN COALESCE(m.sender_name, 'สมาชิกกลุ่ม') ELSE ${DISPLAY_NAME} END AS supervisor_name,
+      g.name AS group_name, t.title AS task_title
     FROM messages m
-    JOIN supervisors s ON s.id = m.supervisor_id
+    LEFT JOIN supervisors s ON s.id = m.supervisor_id
+    LEFT JOIN line_groups g ON g.id = m.group_id
     LEFT JOIN tasks t ON t.id = m.task_id`;
 
   function getMessage(id) {
@@ -246,30 +338,46 @@ function createRepository(db) {
   }
 
   function addMessage({
-    supervisor_id, direction, kind, text = null, task_id = null, image_path = null,
-    latitude = null, longitude = null, line_message_id = null, error = null, created_at = nowIso(),
+    supervisor_id = null, group_id = null, sender_name = null, direction, kind, text = null, task_id = null,
+    image_path = null, latitude = null, longitude = null, line_message_id = null, error = null, created_at = nowIso(),
   }) {
     const r = run(
-      `INSERT INTO messages (supervisor_id, direction, kind, text, task_id, image_path, latitude, longitude,
-                             line_message_id, error, read_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      supervisor_id, direction, kind, text, task_id, image_path, latitude, longitude,
-      line_message_id, error, direction === 'out' ? created_at : null, created_at,
+      `INSERT INTO messages (supervisor_id, group_id, sender_name, direction, kind, text, task_id, image_path,
+                             latitude, longitude, line_message_id, error, read_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      supervisor_id, group_id, sender_name, direction, kind, text, task_id, image_path,
+      latitude, longitude, line_message_id, error, direction === 'out' ? created_at : null, created_at,
     );
     return getMessage(Number(r.lastInsertRowid));
   }
 
   function listMessages(supervisorId, { limit = 200 } = {}) {
     return all(
-      `SELECT * FROM (${MESSAGE_SELECT} WHERE m.supervisor_id = ? ORDER BY m.id DESC LIMIT ?) ORDER BY id ASC`,
+      `SELECT * FROM (${MESSAGE_SELECT} WHERE m.supervisor_id = ? AND m.group_id IS NULL ORDER BY m.id DESC LIMIT ?)
+       ORDER BY id ASC`,
       supervisorId, limit,
+    );
+  }
+
+  function listGroupMessages(groupId, { limit = 200 } = {}) {
+    return all(
+      `SELECT * FROM (${MESSAGE_SELECT} WHERE m.group_id = ? ORDER BY m.id DESC LIMIT ?) ORDER BY id ASC`,
+      groupId, limit,
     );
   }
 
   function markRead(supervisorId) {
     return run(
-      `UPDATE messages SET read_at = ? WHERE supervisor_id = ? AND direction = 'in' AND read_at IS NULL`,
+      `UPDATE messages SET read_at = ?
+       WHERE supervisor_id = ? AND group_id IS NULL AND direction = 'in' AND read_at IS NULL`,
       nowIso(), supervisorId,
+    ).changes;
+  }
+
+  function markGroupRead(groupId) {
+    return run(
+      `UPDATE messages SET read_at = ? WHERE group_id = ? AND direction = 'in' AND read_at IS NULL`,
+      nowIso(), groupId,
     ).changes;
   }
 
@@ -347,6 +455,7 @@ function createRepository(db) {
     return {
       supervisors: count(`SELECT COUNT(*) n FROM supervisors WHERE status = 'active'`),
       pending_supervisors: count(`SELECT COUNT(*) n FROM supervisors WHERE status = 'pending'`),
+      pending_groups: count(`SELECT COUNT(*) n FROM line_groups WHERE status = 'pending' AND is_member = 1`),
       open_tasks: count(`SELECT COUNT(*) n FROM tasks WHERE status != 'done'`),
       overdue_tasks: count(`SELECT COUNT(*) n FROM tasks WHERE status != 'done' AND due_date < ?`, todayInBangkok()),
       open_issues: count(`SELECT COUNT(*) n FROM messages WHERE kind = 'issue' AND resolved = 0`),
@@ -360,9 +469,10 @@ function createRepository(db) {
     raw: db,
     close: () => db.close(),
     getSupervisor, getSupervisorByLineId, createSupervisor, updateSupervisor, listSupervisors,
+    getGroup, getGroupByLineId, createGroup, updateGroup, listGroups, listActiveGroupsForSite, listOpenTasksForSite,
     getTask, createTask, updateTask, deleteTask, listTasks, listOpenTasksFor, listSites,
     listTasksToRemind, markReminded,
-    getMessage, addMessage, listMessages, markRead, setMessageResolved, recentActivity, openIssues,
+    getMessage, addMessage, listMessages, listGroupMessages, markRead, markGroupRead, setMessageResolved, recentActivity, openIssues,
     listTasksDoneBetween, listOpenTasksDueBefore, listOpenTasksDueOn, listInboundBetween,
     markEventProcessed, getSetting, setSetting, summary,
   };

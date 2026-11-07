@@ -2,11 +2,12 @@
 import express from 'express';
 import * as M from './messages.js';
 import { isValidDateString } from './dates.js';
-import { pushToSupervisor as pushTo } from './notify.js';
+import { pushToSupervisor as pushTo, pushToGroup } from './notify.js';
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'];
 const SUPERVISOR_STATUSES = ['pending', 'active', 'inactive'];
 const ROLES = ['supervisor', 'office'];
+const GROUP_STATUSES = ['pending', 'active', 'inactive'];
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -43,6 +44,11 @@ export function createApiRouter({ db, line, morningSummary, dueReminders, office
     const sup = db.getSupervisor(id);
     if (!sup) throw new HttpError(404, 'ไม่พบผู้คุมงาน');
     return sup;
+  };
+  const findGroup = (id) => {
+    const group = db.getGroup(id);
+    if (!group) throw new HttpError(404, 'ไม่พบกลุ่ม');
+    return group;
   };
   const findTask = (id) => {
     const task = db.getTask(id);
@@ -141,7 +147,20 @@ export function createApiRouter({ db, line, morningSummary, dueReminders, office
 
     let push = { pushed: false, push_error: null };
     if (sup && b.notify !== false) push = await notifyAssignment(sup, task);
-    res.status(201).json({ task, ...push });
+
+    // ส่งการ์ดเข้ากลุ่ม LINE ของหน้างานนี้ด้วย (ถ้าเลือก)
+    const groups = [];
+    if (b.notify_group === true) {
+      for (const group of db.listActiveGroupsForSite(task.site)) {
+        const r = await pushToGroup({ db, line }, group, [M.newTask(task, { showAssignee: true })], {
+          kind: 'task',
+          task_id: task.id,
+          text: `📋 งานใหม่ #${task.id}: ${task.title}${task.supervisor_name ? ` (ผู้รับผิดชอบ ${task.supervisor_name})` : ''}`,
+        });
+        groups.push({ group_id: group.id, name: group.name, ...r });
+      }
+    }
+    res.status(201).json({ task, ...push, groups });
   });
 
   router.patch('/tasks/:id', async (req, res) => {
@@ -184,6 +203,44 @@ export function createApiRouter({ db, line, morningSummary, dueReminders, office
     findTask(id);
     db.deleteTask(id);
     res.status(204).end();
+  });
+
+  // ---------- กลุ่ม LINE ----------
+  router.get('/groups', (req, res) => {
+    res.json(db.listGroups());
+  });
+
+  router.patch('/groups/:id', (req, res) => {
+    const id = idParam(req);
+    findGroup(id);
+    const b = req.body ?? {};
+    if (b.status !== undefined && !GROUP_STATUSES.includes(b.status)) throw new HttpError(400, 'สถานะไม่ถูกต้อง');
+    const group = db.updateGroup(id, { name: str(b.name, 100), site: str(b.site, 200), status: b.status });
+    res.json({ group });
+  });
+
+  router.get('/groups/:id/messages', (req, res) => {
+    const id = idParam(req);
+    findGroup(id);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+    res.json(db.listGroupMessages(id, { limit }));
+  });
+
+  router.post('/groups/:id/read', (req, res) => {
+    const id = idParam(req);
+    findGroup(id);
+    res.json({ marked: db.markGroupRead(id) });
+  });
+
+  router.post('/groups/:id/messages', async (req, res) => {
+    const group = findGroup(idParam(req));
+    const text = str(req.body?.text, 4000);
+    if (!text) throw new HttpError(400, 'กรุณาพิมพ์ข้อความ');
+    const result = await pushToGroup({ db, line }, group, [M.text(`💬 สำนักงาน:\n${text}`, M.groupQuickReply())], {
+      kind: 'text',
+      text,
+    });
+    res.status(201).json(result);
   });
 
   // ---------- ข้อความ ----------

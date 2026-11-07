@@ -153,6 +153,7 @@ textarea { resize: vertical; }
 .form-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 label.check { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-weight: 400; }
 label.check input { width: auto; }
+.checks { display: grid; gap: 4px; }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
@@ -219,6 +220,9 @@ fieldset.days legend { font-size: .88rem; color: var(--muted); font-weight: 500;
   display: inline-grid; place-items: center; background: var(--green-soft); color: var(--green-dark); font-weight: 700;
 }
 .avatar.lg { width: 48px; height: 48px; }
+.avatar.group { background: var(--blue-soft); }
+.list-section { padding: 8px 16px 4px; font-size: .78rem; font-weight: 600; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.msg-sender { font-size: .76rem; font-weight: 600; color: var(--muted); margin: 0 4px 2px; }
 .avatar.sm { width: 34px; height: 34px; font-size: .9rem; }
 .sup-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 

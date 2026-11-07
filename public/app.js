@@ -20,7 +20,8 @@ const state = {
   supervisors: [],
   tasks: [],
   sites: [],
-  supId: null,
+  groups: [],
+  thread: null, // { type: 'sup' | 'group', id }
   taskFilter: 'open',
 };
 
@@ -106,19 +107,26 @@ async function loadSummary() {
     el.hidden = !n;
   };
   setBadge('badge-unread', s.unread);
-  setBadge('badge-pending', s.pending_supervisors);
+  setBadge('badge-pending', s.pending_supervisors + s.pending_groups);
   document.getElementById('line-banner').hidden = s.line_configured;
   return s;
 }
 const loadSupervisors = async () => { state.supervisors = await api('/supervisors'); };
+const loadGroups = async () => { state.groups = await api('/groups'); };
 const loadTasks = async () => { state.tasks = await api('/tasks'); };
 const loadSites = async () => { state.sites = await api('/sites'); };
 
 const supervisorById = (id) => state.supervisors.find((s) => s.id === id);
+const groupById = (id) => state.groups.find((g) => g.id === id);
 
 function openChat(supId) {
   location.hash = `#inbox/${supId}`;
 }
+
+/** ลิงก์ไปแชทที่ข้อความนี้อยู่ (กลุ่ม หรือรายคน) */
+const chatHref = (m) => (m.group_id ? `#inbox/g${m.group_id}` : `#inbox/${m.supervisor_id}`);
+/** ชื่อคนส่ง + กลุ่ม (ถ้ามาจากกลุ่ม) */
+const fromLabel = (m) => (m.group_id ? `${m.supervisor_name} · 👥 ${m.group_name ?? 'กลุ่ม'}` : m.supervisor_name);
 
 // ---------------------------------------------------------------- ภาพรวม
 
@@ -135,10 +143,10 @@ function OverviewTab() {
     return h('li', {},
       h('span', { class: 'feed-icon' }, '🚨'),
       h('div', { class: 'feed-body' },
-        h('div', { class: 'feed-title' }, h('span', {}, m.supervisor_name), h('time', {}, fmtDateTime(m.created_at))),
+        h('div', { class: 'feed-title' }, h('span', {}, fromLabel(m)), h('time', {}, fmtDateTime(m.created_at))),
         h('div', { class: 'feed-text' }, m.text),
         h('div', { class: 'row-actions' },
-          h('button', { class: 'btn sm', onclick: () => openChat(m.supervisor_id) }, '💬 เปิดแชท'),
+          h('a', { class: 'btn sm', href: chatHref(m) }, '💬 เปิดแชท'),
           h('button', { class: 'btn sm', onclick: () => resolveIssue(m.id, true) }, '✔ ปิดเรื่อง'),
         ),
       ),
@@ -146,13 +154,14 @@ function OverviewTab() {
   }
 
   function activityItem(m) {
-    const label = m.direction === 'out' ? `สำนักงาน → ${m.supervisor_name}` : m.supervisor_name;
+    let label = fromLabel(m);
+    if (m.direction === 'out') label = m.group_id ? `สำนักงาน → 👥 ${m.group_name ?? 'กลุ่ม'}` : `สำนักงาน → ${m.supervisor_name}`;
     let body = m.text;
     if (m.kind === 'image') body = m.task_id ? `ส่งรูปงาน #${m.task_id}` : 'ส่งรูป';
     if (m.kind === 'summary') body = 'ส่งสรุปงานประจำวันทาง LINE';
     return h('li', {},
       h('span', { class: 'feed-icon' }, KIND_ICON[m.kind] ?? '💬'),
-      h('a', { class: 'feed-link', href: `#inbox/${m.supervisor_id}` },
+      h('a', { class: 'feed-link', href: chatHref(m) },
         h('div', { class: 'feed-body' },
           h('div', { class: 'feed-title' }, h('span', {}, label), h('time', {}, fmtDateTime(m.created_at))),
           h('div', { class: 'feed-text muted' }, body),
@@ -170,7 +179,7 @@ function OverviewTab() {
           stat('งานค้าง', s.open_tasks, '#tasks'),
           stat('งานเลยกำหนด', s.overdue_tasks, '#tasks', 'danger'),
           stat('ปัญหายังไม่ปิด', s.open_issues, '#overview', 'warn'),
-          stat('รออนุมัติ', s.pending_supervisors, '#supervisors', 'warn'),
+          stat('รออนุมัติ', s.pending_supervisors + s.pending_groups, '#supervisors', 'warn'),
         ),
         h('div', { class: 'grid-2' },
           h('section', { class: 'card' },
@@ -201,16 +210,30 @@ async function resolveIssue(id, resolved) {
 
 // ---------------------------------------------------------------- ข้อความ
 
+/** "12" = แชทกับผู้คุมงาน #12, "g5" = กลุ่ม #5 */
+function parseThread(param) {
+  const m = /^(g?)(\d+)$/.exec(param ?? '');
+  return m ? { type: m[1] ? 'group' : 'sup', id: Number(m[2]) } : null;
+}
+const sameThread = (a, b) => Boolean(a && b && a.type === b.type && a.id === b.id);
+
+function groupAvatar(g, size = '') {
+  const url = typeof g.picture_url === 'string' && g.picture_url.startsWith('https://') ? g.picture_url : null;
+  if (url) return h('img', { class: `avatar ${size}`, src: url, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' });
+  return h('span', { class: `avatar ${size} group`, 'aria-hidden': 'true' }, '👥');
+}
+const groupName = (g) => g.name || 'กลุ่ม LINE';
+
 function InboxTab() {
   const list = h('div', { class: 'sup-list' });
   const header = h('div', { class: 'thread-header' });
   const thread = h('div', { class: 'thread' });
   const hint = h('div', { class: 'composer-hint', hidden: true });
-  const input = h('textarea', { rows: 1, placeholder: 'พิมพ์ข้อความถึงผู้คุมงาน… (Enter = ส่ง, Shift+Enter = ขึ้นบรรทัดใหม่)' });
+  const input = h('textarea', { rows: 1 });
   const sendBtn = h('button', { class: 'btn primary', type: 'submit' }, 'ส่ง');
   const composer = h('form', { class: 'composer', onsubmit: send }, input, sendBtn);
   const root = h('div', { class: 'inbox' },
-    h('aside', { class: 'sup-list-wrap' }, h('h2', {}, 'ผู้คุมงาน'), list),
+    h('aside', { class: 'sup-list-wrap' }, h('h2', {}, 'แชท'), list),
     h('section', { class: 'thread-pane' }, header, thread, hint, composer),
   );
   view.replaceChildren(root);
@@ -223,14 +246,22 @@ function InboxTab() {
   });
 
   let renderedKey = '';
+  const endpoint = (t) => (t.type === 'group' ? `/groups/${t.id}` : `/supervisors/${t.id}`);
+  const current = () => {
+    const t = state.thread;
+    if (!t) return null;
+    const item = t.type === 'group' ? groupById(t.id) : supervisorById(t.id);
+    return item ? { ...t, item } : null;
+  };
 
   async function send(e) {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text || !state.supId) return;
+    const t = current();
+    if (!text || !t) return;
     sendBtn.disabled = true;
     try {
-      const result = await api(`/supervisors/${state.supId}/messages`, { method: 'POST', body: { text } });
+      const result = await api(`${endpoint(t)}/messages`, { method: 'POST', body: { text } });
       input.value = '';
       toastPush(result, 'บันทึกข้อความแล้ว');
       await refreshThread(true);
@@ -242,35 +273,65 @@ function InboxTab() {
     }
   }
 
-  function renderList() {
-    if (!state.supervisors.length) {
-      list.replaceChildren(empty('ยังไม่มีผู้คุมงาน'));
-      return;
-    }
-    list.replaceChildren(...state.supervisors.map((s) =>
-      h('button', {
-        class: `sup-item ${s.id === state.supId ? 'active' : ''}`,
-        type: 'button',
-        onclick: () => openChat(s.id),
-      },
-        avatar(s, 'sm'),
-        h('div', { class: 'sup-item-body' },
-          h('div', { class: 'sup-item-name' },
-            h('span', {}, s.display_name),
-            s.unread && s.id !== state.supId ? h('span', { class: 'badge' }, s.unread) : null,
-          ),
-          h('div', { class: 'sup-item-sub' },
-            s.status !== 'active' ? `${SUP_STATUS[s.status]} · ` : '',
-            s.role === 'office' ? 'สำนักงาน · ' : '',
-            s.site || (s.last_message_at ? `ล่าสุด ${fmtDateTime(s.last_message_at)}` : 'ยังไม่มีข้อความ'),
-          ),
-        ),
-      )));
+  function listItem({ key, active, avatarEl, name, unread, sub }) {
+    return h('button', {
+      class: `sup-item ${active ? 'active' : ''}`,
+      type: 'button',
+      onclick: () => { location.hash = `#inbox/${key}`; },
+    },
+      avatarEl,
+      h('div', { class: 'sup-item-body' },
+        h('div', { class: 'sup-item-name' }, h('span', {}, name), unread && !active ? h('span', { class: 'badge' }, unread) : null),
+        h('div', { class: 'sup-item-sub' }, sub),
+      ),
+    );
   }
 
-  function renderHeader(sup) {
+  function renderList() {
+    const t = state.thread;
+    const groups = state.groups.map((g) => listItem({
+      key: `g${g.id}`,
+      active: sameThread(t, { type: 'group', id: g.id }),
+      avatarEl: groupAvatar(g, 'sm'),
+      name: groupName(g),
+      unread: g.unread,
+      sub: [
+        g.status !== 'active' ? SUP_STATUS[g.status] : null,
+        g.is_member ? null : 'บอทออกจากกลุ่มแล้ว',
+        g.site ? `📍 ${g.site}` : 'ยังไม่ได้ผูกหน้างาน',
+      ].filter(Boolean).join(' · '),
+    }));
+    const people = state.supervisors.map((s) => listItem({
+      key: String(s.id),
+      active: sameThread(t, { type: 'sup', id: s.id }),
+      avatarEl: avatar(s, 'sm'),
+      name: s.display_name,
+      unread: s.unread,
+      sub: [
+        s.status !== 'active' ? SUP_STATUS[s.status] : null,
+        s.role === 'office' ? 'สำนักงาน' : null,
+        s.site || (s.last_message_at ? `ล่าสุด ${fmtDateTime(s.last_message_at)}` : 'ยังไม่มีข้อความ'),
+      ].filter(Boolean).join(' · '),
+    }));
+    list.replaceChildren(
+      ...(groups.length ? [h('div', { class: 'list-section' }, '👥 กลุ่ม LINE'), ...groups] : []),
+      ...(groups.length && people.length ? [h('div', { class: 'list-section' }, '👷 แชทรายคน')] : []),
+      ...(people.length ? people : groups.length ? [] : [empty('ยังไม่มีผู้คุมงานหรือกลุ่ม')]),
+    );
+  }
+
+  function setComposer(reason, placeholder) {
+    hint.textContent = reason;
+    hint.hidden = !reason;
+    input.disabled = sendBtn.disabled = Boolean(reason);
+    input.placeholder = placeholder;
+  }
+
+  const backBtn = () => h('a', { class: 'btn ghost sm back', href: '#inbox', onclick: () => { state.thread = null; } }, '←');
+
+  function renderSupHeader(sup) {
     header.replaceChildren(
-      h('a', { class: 'btn ghost sm back', href: '#inbox', onclick: () => { state.supId = null; } }, '←'),
+      backBtn(),
       avatar(sup),
       h('div', { style: 'flex:1;min-width:0' },
         h('div', { class: 'name' }, sup.display_name, ' ', supPill(sup)),
@@ -282,15 +343,31 @@ function InboxTab() {
       sup.phone ? h('a', { class: 'btn sm', href: `tel:${sup.phone.replace(/[^\d+]/g, '')}` }, 'โทร') : null,
     );
     let reason = '';
-    if (sup.status === 'pending') reason = 'ผู้คุมงานคนนี้ยังรออนุมัติ — อนุมัติได้ที่แท็บ "ผู้คุมงาน" ก่อนจึงจะส่งข้อความได้';
+    if (sup.status === 'pending') reason = 'คนนี้ยังรออนุมัติ — อนุมัติได้ที่แท็บ "ผู้คุมงาน" ก่อนจึงจะส่งข้อความได้';
     else if (sup.status === 'inactive') reason = 'บัญชีนี้ถูกปิดใช้งาน';
     else if (!sup.is_following) reason = 'ผู้คุมงานบล็อกบอทหรือลบเพื่อนแล้ว ส่งข้อความไม่ได้';
-    hint.textContent = reason;
-    hint.hidden = !reason;
-    input.disabled = sendBtn.disabled = Boolean(reason);
+    setComposer(reason, 'พิมพ์ข้อความถึงผู้คุมงาน… (Enter = ส่ง, Shift+Enter = ขึ้นบรรทัดใหม่)');
   }
 
-  function messageEl(m) {
+  function renderGroupHeader(g) {
+    header.replaceChildren(
+      backBtn(),
+      groupAvatar(g),
+      h('div', { style: 'flex:1;min-width:0' },
+        h('div', { class: 'name' }, groupName(g), ' ', supPill(g)),
+        h('div', { class: 'small muted' },
+          [g.site ? `📍 ${g.site}` : 'ยังไม่ได้ผูกหน้างาน', `📋 งานค้าง ${g.open_tasks ?? 0}`].join('   '),
+        ),
+      ),
+    );
+    let reason = '';
+    if (!g.is_member) reason = 'บอทไม่ได้อยู่ในกลุ่มนี้แล้ว ส่งข้อความไม่ได้';
+    else if (g.status === 'pending') reason = 'กลุ่มนี้ยังรออนุมัติ — อนุมัติและผูกหน้างานได้ที่แท็บ "ผู้คุมงาน"';
+    else if (g.status === 'inactive') reason = 'กลุ่มนี้ถูกปิดใช้งาน';
+    setComposer(reason, 'พิมพ์ข้อความถึงทั้งกลุ่ม… (นับโควตาตามจำนวนสมาชิกในกลุ่ม)');
+  }
+
+  function messageEl(m, inGroup) {
     if (m.kind === 'system') {
       return h('div', { class: 'msg system' }, `${m.text} · ${fmtDateTime(m.created_at)}`);
     }
@@ -315,6 +392,7 @@ function InboxTab() {
       ));
     }
     return h('div', { class: `msg ${m.direction} kind-${m.kind}` },
+      inGroup && m.direction === 'in' ? h('div', { class: 'msg-sender' }, m.supervisor_name) : null,
       h('div', { class: 'bubble' }, parts),
       h('div', { class: 'msg-meta' },
         m.direction === 'out' ? 'สำนักงาน · ' : '',
@@ -325,45 +403,50 @@ function InboxTab() {
   }
 
   async function refreshThread(force = false) {
-    root.classList.toggle('has-selection', Boolean(state.supId));
-    const sup = state.supId ? supervisorById(state.supId) : null;
-    if (!sup) {
-      header.replaceChildren(h('div', { class: 'muted' }, 'เลือกผู้คุมงานทางซ้ายเพื่อดูข้อความ'));
+    const t = current();
+    root.classList.toggle('has-selection', Boolean(state.thread));
+    if (!t) {
+      header.replaceChildren(h('div', { class: 'muted' }, 'เลือกกลุ่มหรือผู้คุมงานทางซ้ายเพื่อดูข้อความ'));
       thread.replaceChildren(h('div', { class: 'thread-empty' }, '💬 ข้อความ รายงาน รูป และปัญหาจากหน้างานจะแสดงที่นี่'));
-      hint.hidden = true;
+      setComposer('', '');
       input.disabled = sendBtn.disabled = true;
       renderedKey = '';
       return;
     }
-    renderHeader(sup);
-    const messages = await api(`/supervisors/${sup.id}/messages`);
-    if (sup.unread) {
-      await api(`/supervisors/${sup.id}/read`, { method: 'POST' });
-      sup.unread = 0;
+    if (t.type === 'group') renderGroupHeader(t.item);
+    else renderSupHeader(t.item);
+
+    const messages = await api(`${endpoint(t)}/messages`);
+    if (t.item.unread) {
+      await api(`${endpoint(t)}/read`, { method: 'POST' });
+      t.item.unread = 0;
       renderList();
       loadSummary().catch(() => {});
     }
-    const key = `${sup.id}:${messages.length}:${messages.at(-1)?.id}:${messages.map((m) => m.resolved).join('')}`;
+    const threadKey = `${t.type}${t.id}`;
+    const key = `${threadKey}:${messages.length}:${messages.at(-1)?.id}:${messages.map((m) => m.resolved).join('')}`;
     if (!force && key === renderedKey) return;
-    const sameThread = renderedKey.startsWith(`${sup.id}:`);
+    const stay = renderedKey.startsWith(`${threadKey}:`);
     const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
     renderedKey = key;
-    thread.replaceChildren(...(messages.length ? messages.map(messageEl) : [h('div', { class: 'thread-empty' }, 'ยังไม่มีข้อความ')]));
-    if (!sameThread || atBottom || force) thread.scrollTop = thread.scrollHeight;
+    thread.replaceChildren(...(messages.length
+      ? messages.map((m) => messageEl(m, t.type === 'group'))
+      : [h('div', { class: 'thread-empty' }, 'ยังไม่มีข้อความ')]));
+    if (!stay || atBottom || force) thread.scrollTop = thread.scrollHeight;
   }
 
   return {
     tab: 'inbox',
     async refresh(force) {
-      await loadSupervisors();
+      await Promise.all([loadSupervisors(), loadGroups()]);
       renderList();
       await refreshThread(force);
     },
-    async onRoute(id) {
-      state.supId = id;
+    async onRoute(param) {
+      state.thread = parseThread(param);
       renderList();
       await refreshThread(true);
-      if (id && !input.disabled) input.focus();
+      if (state.thread && !input.disabled) input.focus();
     },
   };
 }
@@ -372,18 +455,24 @@ function InboxTab() {
 
 function TasksTab() {
   const supSelect = h('select', { name: 'supervisor_id' });
+  const groupOptionText = h('span');
+  const groupOption = h('label', { class: 'check', hidden: true },
+    h('input', { type: 'checkbox', name: 'notify_group' }), groupOptionText);
   const siteList = h('datalist', { id: 'site-options' });
   const form = h('form', { class: 'card form-grid', onsubmit: createTask },
     h('h2', {}, '📋 มอบหมายงานใหม่'),
     h('label', {}, 'ชื่องาน *', h('input', { name: 'title', required: true, maxlength: '200', placeholder: 'เช่น เทพื้นคอนกรีตชั้น 2' })),
     h('div', { class: 'form-row' },
-      h('label', {}, 'หน้างาน / โครงการ', h('input', { name: 'site', list: 'site-options', maxlength: '200', placeholder: 'เช่น บ้านคุณวิภา ลาดพร้าว 71' })),
+      h('label', {}, 'หน้างาน / โครงการ', h('input', { name: 'site', list: 'site-options', maxlength: '200', placeholder: 'เช่น บ้านคุณวิภา ลาดพร้าว 71', oninput: () => updateGroupOption() })),
       h('label', {}, 'ผู้คุมงาน', supSelect),
       h('label', {}, 'กำหนดเสร็จ', h('input', { name: 'due_date', type: 'date' })),
     ),
     h('label', {}, 'รายละเอียด', h('textarea', { name: 'detail', rows: 2, maxlength: '2000', placeholder: 'สเปก วัสดุ จำนวนคน หรือข้อควรระวัง' })),
     h('div', { class: 'form-actions' },
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'notify', checked: 'checked' }), 'ส่งการ์ดงานให้ผู้คุมงานทาง LINE ทันที'),
+      h('div', { class: 'checks' },
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'notify', checked: 'checked' }), 'ส่งการ์ดงานให้ผู้คุมงานทาง LINE ทันที'),
+        groupOption,
+      ),
       h('button', { class: 'btn primary', type: 'submit' }, 'มอบหมายงาน'),
     ),
     siteList,
@@ -420,6 +509,15 @@ function TasksTab() {
     return options;
   }
 
+  /** แสดงตัวเลือก "ส่งเข้ากลุ่ม" เฉพาะเมื่อหน้างานที่พิมพ์ตรงกับกลุ่ม LINE ที่ใช้งานอยู่ */
+  function updateGroupOption() {
+    const site = form.elements.site.value.trim();
+    const groups = state.groups.filter((g) => site && g.site === site && g.status === 'active' && g.is_member);
+    groupOption.hidden = !groups.length;
+    if (!groups.length) form.elements.notify_group.checked = false;
+    groupOptionText.textContent = `ส่งการ์ดเข้ากลุ่ม ${groups.map((g) => `"${groupName(g)}"`).join(', ')} ด้วย (นับโควตาตามจำนวนสมาชิกในกลุ่ม)`;
+  }
+
   function fillSupSelect() {
     const value = supSelect.value;
     supSelect.replaceChildren(...supervisorOptions(null));
@@ -436,13 +534,18 @@ function TasksTab() {
       due_date: fd.get('due_date') || null,
       detail: fd.get('detail'),
       notify: fd.get('notify') === 'on',
+      notify_group: fd.get('notify_group') === 'on',
     };
     const button = form.querySelector('button[type=submit]');
     button.disabled = true;
     try {
       const result = await api('/tasks', { method: 'POST', body });
       form.reset();
-      toastPush(result, `สร้างงาน #${result.task.id} แล้ว`);
+      updateGroupOption();
+      const groupFailed = (result.groups ?? []).filter((g) => !g.pushed);
+      const groupSent = (result.groups ?? []).length - groupFailed.length;
+      if (groupFailed.length) toast(`สร้างงาน #${result.task.id} แล้ว แต่ส่งเข้ากลุ่มไม่สำเร็จ: ${groupFailed[0].push_error}`, 'warn');
+      else toastPush(result, `สร้างงาน #${result.task.id} แล้ว${groupSent ? ` และส่งเข้ากลุ่ม ${groupSent} กลุ่ม` : ''}`);
       await refresh(true);
     } catch (err) {
       toast(err.message, 'error');
@@ -533,8 +636,11 @@ function TasksTab() {
   }
 
   async function refresh(force) {
-    await Promise.all([loadSupervisors(), loadTasks(), loadSites(), summaryCard.refresh(force), reminderCard.refresh(force)]);
+    await Promise.all([
+      loadSupervisors(), loadGroups(), loadTasks(), loadSites(), summaryCard.refresh(force), reminderCard.refresh(force),
+    ]);
     if (!busy(form)) fillSupSelect();
+    updateGroupOption();
     siteList.replaceChildren(...state.sites.map((s) => h('option', { value: s })));
     if (!force && busy(list)) return;
     renderChips();
@@ -770,7 +876,17 @@ const ReminderCard = () => ScheduleCard({
 
 function SupervisorsTab() {
   const grid = h('div', { class: 'sup-grid' });
+  const groupGrid = h('div', { class: 'sup-grid' });
+  const groupSection = h('div', { class: 'page', hidden: true },
+    h('section', { class: 'card' },
+      h('h2', {}, '👥 กลุ่ม LINE'),
+      h('p', { class: 'muted small', style: 'margin:4px 0 0' },
+        'เชิญบอทเข้ากลุ่ม LINE ของไซต์งาน แล้วกลุ่มจะขึ้นที่นี่ ใส่ "หน้างาน" ให้ตรงกับหน้างานของงาน แล้วกด "อนุมัติ" · ในกลุ่มพิมพ์ งาน / สรุป / รายงาน ... / แจ้งปัญหา ... ได้ บอทไม่เก็บแชทปกติ'),
+    ),
+    groupGrid,
+  );
   const root = h('div', { class: 'page' },
+    groupSection,
     h('section', { class: 'card' },
       h('h2', {}, '👷 ผู้คุมงาน'),
       h('p', { class: 'muted small', style: 'margin:4px 0 0' },
@@ -843,13 +959,75 @@ function SupervisorsTab() {
     return form;
   }
 
+  async function saveGroup(group, form, extra = {}) {
+    const fd = new FormData(form);
+    const body = { name: fd.get('name'), site: fd.get('site'), ...extra };
+    if (body.status === 'active' && !body.site) {
+      toast('ใส่ "หน้างาน" ก่อนอนุมัติ เพื่อให้คำสั่ง งาน/สรุป ในกลุ่มรู้ว่าเป็นไซต์ไหน', 'warn');
+      return;
+    }
+    try {
+      await api(`/groups/${group.id}`, { method: 'PATCH', body });
+      delete form.dataset.dirty;
+      toast(extra.status === 'active' && group.status !== 'active' ? `อนุมัติกลุ่ม ${groupName(group)} แล้ว` : 'บันทึกแล้ว');
+      await tick(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function groupCard(g) {
+    const form = h('form', {
+      class: `card sup-card status-${g.status}`,
+      oninput: () => { form.dataset.dirty = '1'; },
+      onsubmit: (e) => { e.preventDefault(); saveGroup(g, form); },
+    },
+      h('div', { class: 'sup-head' },
+        groupAvatar(g, 'lg'),
+        h('div', { style: 'flex:1;min-width:0' },
+          h('div', { class: 'name' }, groupName(g)),
+          h('div', { class: 'small muted' }, `งานค้างของหน้างาน ${g.open_tasks}`),
+        ),
+        h('div', { class: 'pills' },
+          supPill(g),
+          g.is_member ? null : h('span', { class: 'pill danger' }, 'บอทออกจากกลุ่มแล้ว'),
+        ),
+      ),
+      h('label', {}, 'ชื่อกลุ่ม', h('input', { name: 'name', value: g.name ?? '', maxlength: '100', placeholder: 'ชื่อที่จะแสดงในระบบ' })),
+      h('label', {}, 'หน้างาน (ต้องตรงกับช่องหน้างานของงาน)',
+        h('input', { name: 'site', value: g.site ?? '', maxlength: '200', list: 'sup-site-options', placeholder: 'เช่น บ้านคุณวิภา ลาดพร้าว 71' })),
+      h('div', { class: 'sup-foot' },
+        h('span', { class: 'small muted' }, `เพิ่มเมื่อ ${fmtDateTime(g.created_at)}`),
+        h('div', { class: 'row-actions', style: 'margin:0' },
+          h('a', { class: 'btn sm', href: `#inbox/g${g.id}` }, '💬 แชท'),
+          g.status === 'active'
+            ? h('button', { class: 'btn sm danger', type: 'button', onclick: () => confirm(`ปิดการใช้งานบอทในกลุ่ม ${groupName(g)}?`) && saveGroup(g, form, { status: 'inactive' }) }, 'ปิดใช้งาน')
+            : null,
+          g.status === 'inactive'
+            ? h('button', { class: 'btn sm', type: 'button', onclick: () => saveGroup(g, form, { status: 'active' }) }, 'เปิดใช้งาน')
+            : null,
+          h('button', { class: 'btn sm', type: 'submit' }, 'บันทึก'),
+          g.status === 'pending'
+            ? h('button', { class: 'btn sm primary', type: 'button', onclick: () => saveGroup(g, form, { status: 'active' }) }, '✅ อนุมัติ')
+            : null,
+        ),
+      ),
+    );
+    return form;
+  }
+
   const ORDER = { pending: 0, active: 1, inactive: 2 };
 
   return {
     tab: 'supervisors',
     async refresh(force) {
-      if (!force && (busy(grid) || grid.querySelector('[data-dirty]'))) return;
-      await Promise.all([loadSupervisors(), loadSites()]);
+      if (!force && (busy(root) || root.querySelector('[data-dirty]'))) return;
+      await Promise.all([loadSupervisors(), loadGroups(), loadSites()]);
+      const groups = [...state.groups]
+        .filter((g) => g.is_member || g.status !== 'inactive')
+        .sort((a, b) => ORDER[a.status] - ORDER[b.status] || groupName(a).localeCompare(groupName(b), 'th'));
+      groupSection.hidden = !groups.length;
+      groupGrid.replaceChildren(...groups.map(groupCard));
       const sorted = [...state.supervisors].sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.display_name.localeCompare(b.display_name, 'th'));
       grid.replaceChildren(
         ...(sorted.length
@@ -867,7 +1045,7 @@ const TABS = { overview: OverviewTab, inbox: InboxTab, tasks: TasksTab, supervis
 
 function parseHash() {
   const [tab, id] = location.hash.replace(/^#\/?/, '').split('/');
-  return { tab: TABS[tab] ? tab : 'overview', id: Number(id) || null };
+  return { tab: TABS[tab] ? tab : 'overview', id: id || null };
 }
 
 async function route() {
@@ -878,7 +1056,7 @@ async function route() {
       await current.onRoute(id);
       return;
     }
-    if (tab === 'inbox') state.supId = id;
+    if (tab === 'inbox') state.thread = parseThread(id);
     view.replaceChildren(h('div', { class: 'loading' }, 'กำลังโหลด…'));
     current = TABS[tab]();
     await loadSummary();
