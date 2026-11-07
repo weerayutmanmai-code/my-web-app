@@ -4,14 +4,16 @@ import { createLineClient } from './line.js';
 import { createBot } from './bot.js';
 import { createApp } from './app.js';
 import { createMorningSummary } from './morning-summary.js';
+import { createDueReminders } from './reminders.js';
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
 const line = createLineClient({ channelAccessToken: config.lineChannelAccessToken });
 const bot = createBot({ db, line, config });
 const morningSummary = createMorningSummary({ db, line });
-const app = createApp({ db, line, bot, config, morningSummary });
-const stopMorningSummary = morningSummary.start();
+const dueReminders = createDueReminders({ db, line });
+const app = createApp({ db, line, bot, config, morningSummary, dueReminders });
+const stopSchedules = [morningSummary.start(), dueReminders.start()];
 
 const server = app.listen(config.port, () => {
   console.log(`🚀 เว็บสำนักงาน: http://localhost:${config.port}`);
@@ -24,7 +26,7 @@ const server = app.listen(config.port, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    stopMorningSummary();
+    stopSchedules.forEach((stop) => stop());
     server.close(() => {
       db.close();
       process.exit(0);

@@ -1,9 +1,12 @@
 // สรุปงานส่งเข้า LINE ผู้คุมงานทุกเช้า
 import * as M from './messages.js';
 import { bangkokParts, formatThaiDate, formatThaiLongDate } from './dates.js';
+import { createDailySchedule, validateSchedule } from './scheduler.js';
+import { pushToSupervisor } from './notify.js';
+
+export { CATCH_UP_MINUTES } from './scheduler.js';
 
 const SETTINGS_KEY = 'morning_summary';
-const LAST_SENT_KEY = 'morning_summary_last_date';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -11,36 +14,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   days: [1, 2, 3, 4, 5, 6], // จันทร์-เสาร์ (0 = อาทิตย์)
 });
 
-/** ถ้าเซิร์ฟเวอร์ดับตอนถึงเวลาส่ง จะส่งย้อนหลังให้ถ้ากลับมาภายในกี่นาที (เลยจากนี้ถือว่าสายเกินไป) */
-export const CATCH_UP_MINUTES = 180;
 const MAX_LISTED_TASKS = 20;
 
-const toMinutes = (hhmm) => {
-  const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
-};
-
-export function validateSettings(input = {}) {
-  const errors = [];
-  const out = {};
-  if (input.enabled !== undefined) out.enabled = Boolean(input.enabled);
-  if (input.time !== undefined) {
-    if (typeof input.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.time)) {
-      errors.push('เวลาต้องอยู่ในรูปแบบ HH:MM เช่น 07:30');
-    } else {
-      out.time = input.time;
-    }
-  }
-  if (input.days !== undefined) {
-    const days = Array.isArray(input.days) ? [...new Set(input.days.map(Number))].sort() : null;
-    if (!days || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
-      errors.push('วันที่ส่งไม่ถูกต้อง');
-    } else {
-      out.days = days;
-    }
-  }
-  return { settings: out, errors };
-}
+export const validateSettings = (input) => validateSchedule(input);
 
 /** ข้อความสรุปงานของผู้คุมงานหนึ่งคน (null = ไม่มีงานค้าง ไม่ต้องส่ง) */
 export function buildSummaryText(sup, tasks, today) {
@@ -84,20 +60,6 @@ export function buildSummaryText(sup, tasks, today) {
 }
 
 export function createMorningSummary({ db, line, logger = console, now = () => new Date() }) {
-  let running = false;
-
-  const getSettings = () => ({ ...DEFAULT_SETTINGS, ...db.getSetting(SETTINGS_KEY, {}) });
-
-  function updateSettings(input) {
-    const { settings, errors } = validateSettings(input);
-    if (errors.length) {
-      const err = new Error(errors.join(', '));
-      err.status = 400;
-      throw err;
-    }
-    return db.setSetting(SETTINGS_KEY, { ...getSettings(), ...settings });
-  }
-
   /** ใครจะได้รับสรุป และได้ข้อความว่าอะไร (ยังไม่ส่ง) */
   function preview() {
     const today = bangkokParts(now()).date;
@@ -123,55 +85,33 @@ export function createMorningSummary({ db, line, logger = console, now = () => n
     const result = { sent: 0, failed: 0, recipients: recipients.length };
     for (const r of recipients) {
       const sup = db.getSupervisor(r.supervisor_id);
-      let error = null;
-      if (line.dryRun) {
-        error = 'โหมดทดลอง: ยังไม่ได้ตั้งค่า LINE จึงไม่ได้ส่งจริง';
-      } else {
-        try {
-          await line.push(sup.line_user_id, [M.text(r.text, M.mainQuickReply())]);
-        } catch (err) {
-          error = `ส่ง LINE ไม่สำเร็จ (${err.message})`;
-        }
-      }
-      db.addMessage({ supervisor_id: sup.id, direction: 'out', kind: 'summary', text: r.text, error });
-      if (error) result.failed += 1;
-      else result.sent += 1;
+      const { pushed } = await pushToSupervisor({ db, line }, sup, [M.text(r.text, M.mainQuickReply())], {
+        kind: 'summary',
+        text: r.text,
+      });
+      if (pushed) result.sent += 1;
+      else result.failed += 1;
     }
     logger.info(`[morning-summary] ส่งสำเร็จ ${result.sent} คน, ไม่สำเร็จ ${result.failed} คน`);
     return result;
   }
 
-  /** เรียกทุกนาที: ถึงเวลาแล้ว + วันนี้ยังไม่ได้ส่ง -> ส่ง */
-  async function tick() {
-    if (running) return null;
-    const settings = getSettings();
-    if (!settings.enabled) return null;
-    const nowParts = bangkokParts(now());
-    if (!settings.days.includes(nowParts.weekday)) return null;
-    const late = toMinutes(nowParts.time) - toMinutes(settings.time);
-    if (late < 0 || late > CATCH_UP_MINUTES) return null;
-    if (db.getSetting(LAST_SENT_KEY) === nowParts.date) return null;
-
-    running = true;
-    try {
-      db.setSetting(LAST_SENT_KEY, nowParts.date); // บันทึกก่อนส่ง กันส่งซ้ำถ้าระบบรีสตาร์ทกลางทาง
-      return await sendAll();
-    } finally {
-      running = false;
-    }
-  }
+  const schedule = createDailySchedule({
+    db, key: SETTINGS_KEY, defaults: DEFAULT_SETTINGS, label: 'morning-summary', now, logger,
+    run: () => sendAll(),
+  });
 
   function status() {
-    return { settings: getSettings(), last_sent_date: db.getSetting(LAST_SENT_KEY), ...preview() };
+    return { settings: schedule.getSettings(), last_sent_date: schedule.lastRunDate(), ...preview() };
   }
 
-  function start(intervalMs = 60_000) {
-    const run = () => tick().catch((err) => logger.error('[morning-summary] ผิดพลาด', err));
-    run();
-    const timer = setInterval(run, intervalMs);
-    timer.unref?.();
-    return () => clearInterval(timer);
-  }
-
-  return { getSettings, updateSettings, preview, sendAll, tick, status, start };
+  return {
+    getSettings: schedule.getSettings,
+    updateSettings: schedule.updateSettings,
+    tick: schedule.tick,
+    start: schedule.start,
+    preview,
+    sendAll,
+    status,
+  };
 }
