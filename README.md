@@ -76,6 +76,14 @@ npm test            # รันเทสต์
 
 ใช้ได้กับโฮสต์ที่รัน Node.js หรือ Docker และมี **ดิสก์ถาวร** สำหรับฐานข้อมูลและรูป เช่น Railway (Volume), Render (Persistent Disk), Fly.io (Volume) หรือ VPS
 
+### Railway (ตั้งค่าไว้แล้วใน `railway.json`)
+
+1. สร้าง service จาก GitHub repo นี้ (branch `main`) Railway จะ build จาก `Dockerfile` และเช็ค `/healthz` ให้เอง
+2. เพิ่ม **Volume** ให้ service โดย mount ที่ `/data`
+3. ใส่ Variables: `NODE_ENV=production`, `DATA_DIR=/data`, `ADMIN_PASSWORD`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`
+4. Settings → Networking → **Generate Domain** แล้วใช้ `https://<โดเมน>/webhook` เป็น Webhook URL ใน LINE Developers
+5. ทุกครั้งที่ merge เข้า `main` Railway จะ deploy ใหม่อัตโนมัติ (ข้อมูลใน Volume ไม่หาย)
+
 ```bash
 docker build -t site-line-bot .
 docker run -p 3000:3000 -v $(pwd)/data:/data \
