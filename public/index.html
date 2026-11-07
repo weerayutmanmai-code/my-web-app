@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ศูนย์ประสานงานหน้างาน</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👷</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo" aria-hidden="true">👷</span>
+      <div>
+        <h1>ศูนย์ประสานงานหน้างาน</h1>
+        <p>ผู้คุมงาน ⇄ LINE Bot ⇄ สำนักงาน</p>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="เมนูหลัก">
+      <a href="#overview" data-tab="overview">ภาพรวม</a>
+      <a href="#inbox" data-tab="inbox">ข้อความ <span class="badge" id="badge-unread" hidden></span></a>
+      <a href="#tasks" data-tab="tasks">งาน</a>
+      <a href="#supervisors" data-tab="supervisors">ผู้คุมงาน <span class="badge" id="badge-pending" hidden></span></a>
+    </nav>
+  </header>
+
+  <div id="line-banner" class="banner" hidden>
+    โหมดทดลอง: ยังไม่ได้ตั้งค่า <code>LINE_CHANNEL_ACCESS_TOKEN</code> ข้อความจากเว็บจะยังไม่ถูกส่งไปที่ LINE จริง
+  </div>
+
+  <main id="view" class="view"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
